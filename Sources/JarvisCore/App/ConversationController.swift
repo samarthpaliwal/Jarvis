@@ -24,6 +24,13 @@ public final class ConversationController: ObservableObject {
     @Published public var voiceMuted: Bool = UserDefaults.standard.bool(forKey: "jarvis.voiceMuted") {
         didSet { UserDefaults.standard.set(voiceMuted, forKey: "jarvis.voiceMuted") }
     }
+    /// Keep listening after each reply so the next sentence needs no wake word.
+    @Published public var conversationMode: Bool = UserDefaults.standard.object(forKey: "jarvis.conversationMode") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(conversationMode, forKey: "jarvis.conversationMode") }
+    }
+    private var currentReply = ""
+    private var lastUserText = ""
+    static let endWords: Set<String> = ["thanks", "thank", "thankyou", "bye", "goodbye", "later", "done", "nevermind", "never", "cheers", "nothing", "no"]
 
     /// Set by the app: when a wake arrives while an arrival window is open, run the homecoming scene instead.
     public var homecomingIfArriving: (() -> Bool)?
@@ -112,23 +119,31 @@ public final class ConversationController: ObservableObject {
 
     // MARK: Listening
 
-    private func startListening(at date: Date) {
+    /// `followUp`: no wake word, shorter no-speech timeout, calmer UI.
+    /// `seed`: text already heard on a session that keeps running (interrupt-by-speech).
+    private func startListening(at date: Date, followUp: Bool = false, seed: String? = nil) {
         turn += 1
         wakeTime = date
-        firstWordLogged = false
+        firstWordLogged = seed != nil
         listeningForStopOnly = false
-        endpointer = Endpointer(settings: endpointSettings)
+        var settings = endpointSettings
+        if followUp { settings.noSpeechTimeout = max(2, config.profile.speech?.followUpSeconds ?? 7) }
+        endpointer = Endpointer(settings: settings)
         lastTurn = TurnStats()
         state = .listening
+        notch.isFollowUp = followUp
         notch.listen()
+        if let seed { _ = endpointer.update(TranscriptUpdate(text: seed, isFinal: false)); notch.transcript = seed }
         wake.setPaused(true)
         onTurnActive?(true)
-        do {
-            try transcriber.start(onUpdate: { [weak self] u in self?.handleTranscript(u) },
-                                  onError: { [weak self] e in self?.handleTranscriberError(e) })
-        } catch {
-            handleTranscriberError(error)
-            return
+        if seed == nil {
+            do {
+                try transcriber.start(onUpdate: { [weak self] u in self?.handleTranscript(u) },
+                                      onError: { [weak self] e in self?.handleTranscriberError(e) })
+            } catch {
+                handleTranscriberError(error)
+                return
+            }
         }
         let thisTurn = turn
         endpointTimer?.cancel()
@@ -164,6 +179,16 @@ public final class ConversationController: ObservableObject {
             if words.contains("stop") || words.contains("stop.") {
                 JarvisLog.info("Barge-in: “stop” while speaking")
                 stopEverything()
+                return
+            }
+            // Talking over Jarvis (not an echo of its own voice) interrupts and becomes the next turn.
+            if config.profile.speech?.interruptOnSpeech ?? true, state == .speaking,
+               Self.isGenuineInterruption(heard: u.text, spoken: currentReply) {
+                JarvisLog.info("Barge-in: speech while speaking: “\(u.text)”")
+                speech.stop()
+                replyTask?.cancel()
+                listeningForStopOnly = false
+                startListening(at: Date(), followUp: true, seed: u.text)
             }
             return
         }
@@ -207,9 +232,20 @@ public final class ConversationController: ObservableObject {
         onTurnActive?(false)
         guard !text.isEmpty else {
             state = .idle
+            notch.isFollowUp = false
             notch.collapse()
             return
         }
+        // "thanks" / "that's all" on a follow-up ends the conversation without a round trip.
+        if notch.isFollowUp, Self.isConversationEnd(text) {
+            JarvisLog.info("Conversation ended by “\(text)”")
+            transcriber.cancel()
+            state = .idle
+            notch.isFollowUp = false
+            notch.collapse()
+            return
+        }
+        lastUserText = text
         state = .thinking
         notch.think()
         replyTask?.cancel()
@@ -249,6 +285,7 @@ public final class ConversationController: ObservableObject {
         var chunker = SentenceChunker()
         var firstDelta = true
         var spokeSomething = false
+        currentReply = ""
 
         let onText: (String) -> Void = { [weak self] delta in
             guard let self else { return }
@@ -261,6 +298,7 @@ public final class ConversationController: ObservableObject {
                 }
                 if self.state == .thinking { self.state = voiceOn ? .speaking : .thinking; if voiceOn { self.listenForStop() } }
                 self.notch.appendReply(delta)
+                self.currentReply += delta
                 self.notch.cancelCollapse()
                 if voiceOn {
                     for sentence in chunker.push(delta) {
@@ -293,6 +331,7 @@ public final class ConversationController: ObservableObject {
         if notch.phase != .responding { notch.respond(turn.text, cards: turn.cards, collapseAfter: voiceOn ? 60 : 10) }
         else { notch.cancelCollapse(); for c in turn.cards { notch.addCard(c) } }
         if turn.text.isEmpty && turn.cards.isEmpty { notch.replyText = "Done." }
+        notch.logExchange(you: lastUserText, jarvis: turn.text)
 
         guard voiceOn else {
             state = .idle
@@ -308,9 +347,30 @@ public final class ConversationController: ObservableObject {
             self.transcriber.cancel()
             if self.state == .speaking {
                 self.state = .idle
-                self.notch.scheduleCollapse(after: completed ? 2.5 : 0.5)
+                if completed, self.conversationMode, (self.config.profile.speech?.followUpSeconds ?? 7) > 0 {
+                    self.startListening(at: Date(), followUp: true)
+                } else {
+                    self.notch.scheduleCollapse(after: completed ? 2.5 : 0.5)
+                }
             }
         }
+    }
+
+    /// Words heard while Jarvis talks: a real interruption, or just the mic hearing Jarvis?
+    nonisolated static func isGenuineInterruption(heard: String, spoken: String) -> Bool {
+        let words = heard.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        guard words.count >= 2 else { return false }
+        let spokenWords = Set(spoken.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+        guard !spokenWords.isEmpty else { return true }
+        let overlap = Double(words.filter { spokenWords.contains($0) }.count) / Double(words.count)
+        return overlap < 0.5
+    }
+
+    nonisolated static func isConversationEnd(_ text: String) -> Bool {
+        let words = text.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+        guard !words.isEmpty, words.count <= 4 else { return false }
+        if words.joined(separator: " ").contains("thats all") || words.joined(separator: " ").contains("that s all") { return true }
+        return words.contains { endWords.contains($0) }
     }
 
     /// Speak + show something outside a user turn (mode changes, timers, Tier 1 summaries).

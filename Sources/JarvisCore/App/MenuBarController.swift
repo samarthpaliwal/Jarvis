@@ -91,12 +91,22 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             MenuBarController.promptForAPIKey(notch: notch)
         })
         menu.addItem(ClosureMenuItem(title: "Clear Conversation", symbol: "eraser") { [brain] in brain.clearHistory() })
+        let convo = ClosureMenuItem(title: "Conversation Mode (follow-ups without “Hey Jarvis”)", symbol: "bubble.left.and.bubble.right") { [conversation] in
+            conversation.conversationMode.toggle()
+        }
+        convo.state = conversation.conversationMode ? .on : .off
+        menu.addItem(convo)
         let hudItem = ClosureMenuItem(title: "Full-Screen HUD for Every Conversation", symbol: "rectangle.inset.filled") { [hud] in
             hud.fullScreenAlways.toggle()
         }
         hudItem.state = hud.fullScreenAlways ? .on : .off
         menu.addItem(hudItem)
         menu.addItem(ClosureMenuItem(title: "Show HUD Now", symbol: "sparkles.rectangle.stack") { [hud] in hud.show(scene: false) })
+        let displays = NSScreen.screens.map(\.localizedName)
+        let target = NotchGeometry.screen(named: hud.preferredDisplay)?.localizedName ?? NotchGeometry.preferredScreen()?.localizedName ?? "?"
+        let disp = NSMenuItem(title: "HUD display: \(target)\(hud.preferredDisplay.map { " (prefers \($0))" } ?? "") · connected: \(displays.joined(separator: ", "))", action: nil, keyEquivalent: "")
+        disp.isEnabled = false
+        menu.addItem(disp)
         menu.addItem(ClosureMenuItem(title: "Run Homecoming Scene", symbol: "house.and.flag") { [scenes] in scenes.homecoming(trigger: "menu") })
         menu.addItem(ClosureMenuItem(title: "Ask by Text…", symbol: "keyboard") { [conversation] in
             let alert = NSAlert()

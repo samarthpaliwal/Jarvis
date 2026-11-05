@@ -64,7 +64,9 @@
     "locale": "en-US",
     "silenceEndSeconds": 1.3,
     "noSpeechTimeoutSeconds": 6,
-    "maxUtteranceSeconds": 20
+    "maxUtteranceSeconds": 20,
+    "followUpSeconds": 7,
+    "interruptOnSpeech": true
   },
   "proactive": {
     "breakReminders": false,
@@ -103,6 +105,7 @@
   "hud": {
     "fullScreenAlways": false,
     "fullScreenForScenes": true,
-    "dismissAfterSeconds": 8
+    "dismissAfterSeconds": 8,
+    "preferredDisplay": "Odyssey G5"
   }
 }

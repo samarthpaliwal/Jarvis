@@ -46,6 +46,13 @@ public struct HUDView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
 
                 VStack(spacing: 10) {
+                    ForEach(model.log.suffix(3)) { ex in
+                        VStack(spacing: 3) {
+                            Text("› " + ex.you).font(.system(size: 12, design: .monospaced)).foregroundStyle(Self.cyan.opacity(0.5)).lineLimit(1)
+                            Text(ex.jarvis).font(.system(size: 13)).foregroundStyle(.white.opacity(0.5)).lineLimit(2)
+                                .multilineTextAlignment(.center).frame(maxWidth: geo.size.width * 0.6)
+                        }
+                    }
                     if !model.transcript.isEmpty {
                         Text("› " + model.transcript)
                             .font(.system(size: 15, design: .monospaced)).foregroundStyle(Self.cyan.opacity(0.9))
@@ -71,7 +78,7 @@ public struct HUDView: View {
     private var statusLine: String {
         switch model.phase {
         case .idle: return "STANDBY"
-        case .listening: return "LISTENING ▸ ▸ ▸"
+        case .listening: return model.isFollowUp ? "LISTENING ▸ ▸ ▸   (go ahead, no wake word needed · say “thanks” to finish)" : "LISTENING ▸ ▸ ▸"
         case .thinking: return "PROCESSING"
         case .responding: return "ONLINE"
         }

@@ -59,6 +59,16 @@ public final class NotchViewModel: ObservableObject {
     /// 0...1 opacity of the full-screen Siri-style edge glow.
     @Published public var edgeGlow: Double = 0
 
+    /// Recent exchanges for the HUD (you / Jarvis), newest last.
+    public struct Exchange: Equatable, Identifiable { public let id = UUID(); public var you: String; public var jarvis: String }
+    @Published public var log: [Exchange] = []
+    public func logExchange(you: String, jarvis: String) {
+        log.append(Exchange(you: you, jarvis: jarvis))
+        if log.count > 6 { log.removeFirst(log.count - 6) }
+    }
+    /// True while listening for a follow-up (no wake word): a calmer glow.
+    @Published public var isFollowUp = false
+
     /// Resolves the approval card's buttons. Set by the conversation controller.
     public var onApprovalDecision: ((UUID, Bool) -> Void)?
 
@@ -87,7 +97,7 @@ public final class NotchViewModel: ObservableObject {
         cancelCollapse()
         transcript = ""
         phase = .listening
-        edgeGlow = glowStrength
+        edgeGlow = isFollowUp ? glowStrength * 0.35 : glowStrength
     }
 
     public func think() {
@@ -113,6 +123,7 @@ public final class NotchViewModel: ObservableObject {
     public func collapse() {
         cancelCollapse()
         phase = .idle
+        isFollowUp = false
         edgeGlow = 0
         audioLevels = Array(repeating: 0, count: audioLevels.count)
     }

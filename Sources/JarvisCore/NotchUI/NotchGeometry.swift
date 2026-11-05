@@ -36,6 +36,12 @@ public struct NotchGeometry: Equatable {
                              notchHeight: max(menuBar, fallbackPillHeight), screenFrame: screen.frame)
     }
 
+    /// A connected display whose name contains `name` (case-insensitive), e.g. "Odyssey G5".
+    public static func screen(named name: String?) -> NSScreen? {
+        guard let name, !name.isEmpty else { return nil }
+        return NSScreen.screens.first { $0.localizedName.localizedCaseInsensitiveContains(name) }
+    }
+
     /// Prefer the built-in display with a notch; otherwise whatever screen is main.
     public static func preferredScreen() -> NSScreen? {
         NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens.first

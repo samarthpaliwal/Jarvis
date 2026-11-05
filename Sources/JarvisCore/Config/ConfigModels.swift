@@ -45,15 +45,19 @@ public struct Profile: Codable, Equatable {
         public var fullScreenAlways: Bool
         public var fullScreenForScenes: Bool
         public var dismissAfterSeconds: Double
-        private enum CodingKeys: String, CodingKey { case fullScreenAlways, fullScreenForScenes, dismissAfterSeconds }
-        public init(fullScreenAlways: Bool = false, fullScreenForScenes: Bool = true, dismissAfterSeconds: Double = 8) {
+        /// Display name (as macOS shows it, e.g. "Odyssey G5") the HUD prefers when connected. Falls back to the notch screen.
+        public var preferredDisplay: String?
+        private enum CodingKeys: String, CodingKey { case fullScreenAlways, fullScreenForScenes, dismissAfterSeconds, preferredDisplay }
+        public init(fullScreenAlways: Bool = false, fullScreenForScenes: Bool = true, dismissAfterSeconds: Double = 8, preferredDisplay: String? = nil) {
             self.fullScreenAlways = fullScreenAlways; self.fullScreenForScenes = fullScreenForScenes; self.dismissAfterSeconds = dismissAfterSeconds
+            self.preferredDisplay = preferredDisplay
         }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             fullScreenAlways = try c.decodeIfPresent(Bool.self, forKey: .fullScreenAlways) ?? false
             fullScreenForScenes = try c.decodeIfPresent(Bool.self, forKey: .fullScreenForScenes) ?? true
             dismissAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .dismissAfterSeconds) ?? 8
+            preferredDisplay = try c.decodeIfPresent(String.self, forKey: .preferredDisplay)
         }
     }
     public struct Briefing: Codable, Equatable {
@@ -113,6 +117,26 @@ public struct Profile: Codable, Equatable {
         public var silenceEndSeconds: Double
         public var noSpeechTimeoutSeconds: Double
         public var maxUtteranceSeconds: Double
+        /// After a reply, keep listening this long for a follow-up (no wake word needed). 0 disables.
+        public var followUpSeconds: Double
+        /// Talking over Jarvis stops it and starts a new turn.
+        public var interruptOnSpeech: Bool
+
+        private enum CodingKeys: String, CodingKey { case locale, silenceEndSeconds, noSpeechTimeoutSeconds, maxUtteranceSeconds, followUpSeconds, interruptOnSpeech }
+        public init(locale: String, silenceEndSeconds: Double, noSpeechTimeoutSeconds: Double, maxUtteranceSeconds: Double,
+                    followUpSeconds: Double = 7, interruptOnSpeech: Bool = true) {
+            self.locale = locale; self.silenceEndSeconds = silenceEndSeconds; self.noSpeechTimeoutSeconds = noSpeechTimeoutSeconds
+            self.maxUtteranceSeconds = maxUtteranceSeconds; self.followUpSeconds = followUpSeconds; self.interruptOnSpeech = interruptOnSpeech
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            locale = try c.decodeIfPresent(String.self, forKey: .locale) ?? "en-US"
+            silenceEndSeconds = try c.decodeIfPresent(Double.self, forKey: .silenceEndSeconds) ?? 1.3
+            noSpeechTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .noSpeechTimeoutSeconds) ?? 6
+            maxUtteranceSeconds = try c.decodeIfPresent(Double.self, forKey: .maxUtteranceSeconds) ?? 20
+            followUpSeconds = try c.decodeIfPresent(Double.self, forKey: .followUpSeconds) ?? 7
+            interruptOnSpeech = try c.decodeIfPresent(Bool.self, forKey: .interruptOnSpeech) ?? true
+        }
     }
     public struct Proactive: Codable, Equatable {
         public var breakReminders: Bool
@@ -177,7 +201,7 @@ public struct Profile: Codable, Equatable {
         proactive: Proactive(breakReminders: false, breakAfterMinutes: 90, quietHoursStart: "22:30", quietHoursEnd: "06:00"),
         speech: Speech(locale: "en-US", silenceEndSeconds: 1.3, noSpeechTimeoutSeconds: 6, maxUtteranceSeconds: 20),
         wake: Wake(phrases: [WakePhrase(phrase: "wake up daddy's home", aliases: ["daddy's home", "daddy is home"], scene: "homecoming")]),
-        hud: HUD()
+        hud: HUD(preferredDisplay: "Odyssey G5")
     )
 }
 

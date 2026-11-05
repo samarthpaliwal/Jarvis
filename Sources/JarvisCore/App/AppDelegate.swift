@@ -93,7 +93,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),
         ])
         brain = Brain(dispatcher: dispatcher, config: config, modes: modes, undo: undo)
-        hud = HUDWindowController(model: notch, dismissAfter: config.profile.hud?.dismissAfterSeconds ?? 8)
+        hud = HUDWindowController(model: notch, dismissAfter: config.profile.hud?.dismissAfterSeconds ?? 8,
+                                  preferredDisplay: config.profile.hud?.preferredDisplay)
         conversation = ConversationController(notch: notch, wake: wake, transcriber: transcriber,
                                               speech: speech, config: config, modes: modes, brain: brain)
         dispatcher.register([SetDisplayModeTool(hud: hud), WelcomeHomeTool(run: { [weak self] in self?.scenes.homecoming(trigger: "voice") })])
@@ -160,6 +161,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             try? FileManager.default.removeItem(at: askURL)
                                             if q == "!homecoming" { self.scenes.homecoming(trigger: "debug"); return }
                                             if q == "!arrive" { self.spotter.openWindow(minutes: 10, reason: "debug"); return }
+                                            if q == "!hud" { self.hud.show(scene: false); return }
                                             JarvisLog.info("Text turn: “\(q)”")
                                             self.conversation.ask(q)
                                             return

@@ -354,7 +354,19 @@ right, transcript and reply along the bottom. Click or press Esc to dismiss; it 
 Conversation* in the menu (or "Jarvis, full screen" → `set_display_mode`) makes every turn take the
 screen. Reduce Motion freezes the rings.
 
-Test hooks: write `!homecoming` or `!arrive` to `~/Library/Application Support/Jarvis/ask.txt` and
+**Which display.** `profile.json → hud.preferredDisplay` ("Odyssey G5") puts the HUD on that monitor
+whenever it is connected, and on the notch screen otherwise. The menu shows which display is in use.
+The notch pill and edge glow always stay on the built-in display.
+
+**A proper conversation.** After each reply Jarvis keeps listening for `speech.followUpSeconds` (7 s)
+with a calmer glow and "Go on…" in the notch, so the next sentence needs no wake word. Say "thanks",
+"that's all", or "bye" to end; silence ends it quietly. *Conversation Mode* in the menu turns this off.
+**Cutting it off:** talk over Jarvis and it stops mid-sentence and takes what you said as the next turn
+(`speech.interruptOnSpeech`). The mic also hears Jarvis itself through the speakers, so words that
+mostly match what it is currently saying are ignored as echo; "stop" still works on its own. The HUD
+shows the last three exchanges.
+
+Test hooks: write `!homecoming`, `!arrive`, or `!hud` to `~/Library/Application Support/Jarvis/ask.txt` and
 `kill -INFO $(pgrep -x Jarvis)`.
 
 ## Safety model (enforced in code, Milestone 4)
@@ -413,6 +425,12 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.7.1 — Conversation flow + G5 (2026-11-05)
+- HUD on a preferred display (`hud.preferredDisplay`, default "Odyssey G5"), fallback to the notch screen.
+- Conversation mode: follow-up listening after every reply (no wake word), end words, quiet timeout.
+- Interrupt by talking over Jarvis, with an echo filter against its own speech; "stop" unchanged.
+- HUD exchange log; menu toggles for Conversation Mode and the HUD display line. 76 tests.
 
 ### 0.7.0 — Iron Man mode (2026-11-05)
 - JARVIS persona in the system prompt, British voice preference.

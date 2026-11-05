@@ -100,7 +100,7 @@ public struct NotchRootView: View {
                 Image(systemName: "mic.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color(red: 0.36, green: 0.66, blue: 1.0))
-                Text(model.transcript.isEmpty ? "Listening…" : model.transcript)
+                Text(model.transcript.isEmpty ? (model.isFollowUp ? "Go on…" : "Listening…") : model.transcript)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white)
                     .lineLimit(1)

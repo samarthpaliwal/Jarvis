@@ -21,10 +21,13 @@ public final class HUDWindowController: ObservableObject {
     private var dismissTask: Task<Void, Never>?
     private var pinnedForScene = false
     private var dismissAfter: TimeInterval = 8
+    /// Display name the HUD should use when connected (e.g. "Odyssey G5"); nil = the notch screen.
+    public var preferredDisplay: String?
 
-    public init(model: NotchViewModel, dismissAfter: TimeInterval) {
+    public init(model: NotchViewModel, dismissAfter: TimeInterval, preferredDisplay: String? = nil) {
         self.model = model
         self.dismissAfter = dismissAfter
+        self.preferredDisplay = preferredDisplay
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 4)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
@@ -58,7 +61,7 @@ public final class HUDWindowController: ObservableObject {
     /// Show the HUD. `scene` keeps it up until the scene ends (plus the dismiss delay).
     public func show(scene: Bool) {
         pinnedForScene = scene || pinnedForScene
-        guard let screen = NotchGeometry.preferredScreen() else { return }
+        guard let screen = NotchGeometry.screen(named: preferredDisplay) ?? NotchGeometry.preferredScreen() else { return }
         panel.setFrame(screen.frame, display: true)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -73,7 +76,7 @@ public final class HUDWindowController: ObservableObject {
                 return e
             }
         }
-        JarvisLog.info("HUD shown (\(scene ? "scene" : "conversation"))")
+        JarvisLog.info("HUD shown (\(scene ? "scene" : "conversation")) on \(screen.localizedName)")
     }
 
     public func sceneEnded() {
