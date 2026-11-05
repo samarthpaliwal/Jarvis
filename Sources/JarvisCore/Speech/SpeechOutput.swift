@@ -25,7 +25,8 @@ public enum VoicePicker {
     }
 
     /// Natural-sounding default voices, in order of preference, when nothing better is installed.
-    static let preferredNames = ["Samantha", "Alex", "Daniel", "Karen", "Moira", "Rishi", "Tessa", "Fiona", "Kate", "Aaron", "Nicky", "Evan", "Ava", "Zoe", "Tom"]
+    /// JARVIS is British: en-GB voices first (Daniel, Oliver, Kate, Serena), then the natural US ones.
+    static let preferredNames = ["Daniel", "Oliver", "Kate", "Serena", "Samantha", "Alex", "Karen", "Moira", "Rishi", "Tessa", "Fiona", "Aaron", "Nicky", "Evan", "Ava", "Zoe", "Tom"]
 
     /// Novelty / legacy voices live under this prefix (Albert, Bubbles, Cellos, …).
     static func isNovelty(_ identifier: String) -> Bool {

@@ -20,15 +20,19 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     private let briefing: BriefingService
     private let proactive: ProactiveScheduler
     private let context: ContextDetector
+    private let hud: HUDWindowController
+    private let scenes: SceneDirector
     private let menu = NSMenu()
 
     public init(config: ConfigStore, notch: NotchViewModel, notchWindow: NotchWindowController,
                 modes: ModeManager, demo: DemoDriver, wake: WakeWordService,
                 conversation: ConversationController, speech: AppleSpeechOutput, brain: Brain, log: ActionLog,
                 googleAuth: GoogleAuth, notion: NotionClient, briefing: BriefingService,
-                proactive: ProactiveScheduler, context: ContextDetector) {
+                proactive: ProactiveScheduler, context: ContextDetector, hud: HUDWindowController, scenes: SceneDirector) {
         self.proactive = proactive
         self.context = context
+        self.hud = hud
+        self.scenes = scenes
         self.conversation = conversation
         self.speech = speech
         self.brain = brain
@@ -87,6 +91,13 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             MenuBarController.promptForAPIKey(notch: notch)
         })
         menu.addItem(ClosureMenuItem(title: "Clear Conversation", symbol: "eraser") { [brain] in brain.clearHistory() })
+        let hudItem = ClosureMenuItem(title: "Full-Screen HUD for Every Conversation", symbol: "rectangle.inset.filled") { [hud] in
+            hud.fullScreenAlways.toggle()
+        }
+        hudItem.state = hud.fullScreenAlways ? .on : .off
+        menu.addItem(hudItem)
+        menu.addItem(ClosureMenuItem(title: "Show HUD Now", symbol: "sparkles.rectangle.stack") { [hud] in hud.show(scene: false) })
+        menu.addItem(ClosureMenuItem(title: "Run Homecoming Scene", symbol: "house.and.flag") { [scenes] in scenes.homecoming(trigger: "menu") })
         menu.addItem(ClosureMenuItem(title: "Ask by Text…", symbol: "keyboard") { [conversation] in
             let alert = NSAlert()
             alert.messageText = "Ask Jarvis"

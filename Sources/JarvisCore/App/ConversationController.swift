@@ -25,6 +25,13 @@ public final class ConversationController: ObservableObject {
         didSet { UserDefaults.standard.set(voiceMuted, forKey: "jarvis.voiceMuted") }
     }
 
+    /// Set by the app: when a wake arrives while an arrival window is open, run the homecoming scene instead.
+    public var homecomingIfArriving: (() -> Bool)?
+    /// Extra consumer of the mic stream (phrase spotter). Capture queue.
+    public nonisolated(unsafe) var extraAudioTap: (([Float]) -> Void)?
+    /// Called when a user turn starts / ends so the spotter can pause.
+    public var onTurnActive: ((Bool) -> Void)?
+
     /// Streams a reply for a transcript. Default: the Brain (Claude). Tests can swap it.
     public var responder: (String, @escaping (String) -> Void) async throws -> Brain.Turn
 
@@ -87,6 +94,7 @@ public final class ConversationController: ObservableObject {
         case .idle:
             break
         }
+        if let h = homecomingIfArriving, h() { return }
         startListening(at: date)
     }
 
@@ -97,6 +105,7 @@ public final class ConversationController: ObservableObject {
         endpointTimer?.cancel()
         if let p = pendingApproval { pendingApproval = nil; p.continuation.resume(returning: false) }
         wake.setPaused(false)
+        onTurnActive?(false)
         state = .idle
         notch.collapse()
     }
@@ -113,6 +122,7 @@ public final class ConversationController: ObservableObject {
         state = .listening
         notch.listen()
         wake.setPaused(true)
+        onTurnActive?(true)
         do {
             try transcriber.start(onUpdate: { [weak self] u in self?.handleTranscript(u) },
                                   onError: { [weak self] e in self?.handleTranscriberError(e) })
@@ -194,6 +204,7 @@ public final class ConversationController: ObservableObject {
         lastTurn.transcript = text
         JarvisLog.info("Listening ended (\(reason.rawValue)): “\(text)”")
         wake.setPaused(false)
+        onTurnActive?(false)
         guard !text.isEmpty else {
             state = .idle
             notch.collapse()
@@ -303,11 +314,11 @@ public final class ConversationController: ObservableObject {
     }
 
     /// Speak + show something outside a user turn (mode changes, timers, Tier 1 summaries).
-    public func deliver(_ text: String, cards: [NotchCard] = []) {
+    public func deliver(_ text: String, cards: [NotchCard] = [], onDone: (() -> Void)? = nil) {
         let mode = modes.current
         let voiceOn = mode.voice.enabled && !voiceMuted
         notch.respond(text, cards: cards, collapseAfter: voiceOn ? 60 : 8)
-        guard voiceOn, state == .idle else { return }
+        guard voiceOn, state == .idle else { onDone?(); return }
         state = .speaking
         listenForStop()
         speech.speak(text, volume: Float(mode.voice.volume), rate: Float(config.profile.assistant.speechRate)) { [weak self] completed in
@@ -317,6 +328,7 @@ public final class ConversationController: ObservableObject {
                 self.state = .idle
                 self.notch.scheduleCollapse(after: completed ? 2.5 : 0.5)
             }
+            onDone?()
         }
     }
 
@@ -394,5 +406,6 @@ public final class ConversationController: ObservableObject {
 
     private nonisolated func forwardAudio(_ chunk: [Float]) {
         transcriber.append(samples: chunk)
+        extraAudioTap?(chunk)
     }
 }

@@ -15,17 +15,23 @@
   "assistant": {
     "name": "Jarvis",
     "addressUserAs": "Sam",
-    "tone": "warm, quick, lightly witty, never long-winded",
+    "tone": "JARVIS from Iron Man: composed, dry British wit, unflappable, quietly loyal, never long-winded. Calls him Sam, and 'sir' now and then when it lands.",
     "spokenReplyMaxSentences": 2,
     "voiceIdentifier": null,
-    "speechRate": 0.52
+    "speechRate": 0.52,
+    "persona": "ironman"
   },
   "briefing": {
     "time": "07:00",
     "onFirstUnlock": true,
     "examLookaheadDays": 14,
     "deadlineCount": 3,
-    "nudgeDaysBefore": [7, 3, 1, 0]
+    "nudgeDaysBefore": [
+      7,
+      3,
+      1,
+      0
+    ]
   },
   "claude": {
     "model": "claude-sonnet-5-5",
@@ -43,11 +49,16 @@
       "homeworkTitleProperty": "Assignment",
       "homeworkDueProperty": "Due",
       "homeworkStatusProperty": "Status",
-      "homeworkDoneValues": ["Submitted", "Graded"],
+      "homeworkDoneValues": [
+        "Submitted",
+        "Graded"
+      ],
       "examsTitleProperty": "Exam",
       "examsDateProperty": "Date"
     },
-    "codeFolders": ["~/Developer"]
+    "codeFolders": [
+      "~/Developer"
+    ]
   },
   "speech": {
     "locale": "en-US",
@@ -62,6 +73,36 @@
     "quietHoursEnd": "06:00",
     "autoModes": true,
     "manualOverrideHours": 2,
-    "callApps": ["zoom.us", "FaceTime", "Microsoft Teams", "Webex", "Google Meet", "Slack Huddle", "Discord"]
+    "callApps": [
+      "zoom.us",
+      "FaceTime",
+      "Microsoft Teams",
+      "Webex",
+      "Google Meet",
+      "Slack Huddle",
+      "Discord"
+    ]
+  },
+  "wake": {
+    "_comment": "Extra phrases are spotted with on-device speech recognition, only while an arrival window is open (home Wi-Fi seen after being away, or wake from sleep at home) unless alwaysSpotPhrases is true (costs CPU).",
+    "phrases": [
+      {
+        "phrase": "wake up daddy's home",
+        "aliases": [
+          "daddy's home",
+          "daddy is home",
+          "wake up daddys home"
+        ],
+        "scene": "homecoming"
+      }
+    ],
+    "arrivalWindowMinutes": 10,
+    "alwaysSpotPhrases": false,
+    "homecomingOnHeyJarvis": true
+  },
+  "hud": {
+    "fullScreenAlways": false,
+    "fullScreenForScenes": true,
+    "dismissAfterSeconds": 8
   }
 }

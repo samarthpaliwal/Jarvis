@@ -325,6 +325,38 @@ security settings, `sudo`.
 
 **Typing instead of talking:** *Ask by Text…* in the menu runs the same pipeline without the mic.
 
+## Iron Man mode: persona, "Wake up, Daddy's home", full-screen HUD
+
+**Persona.** `profile.json → assistant.persona: "ironman"` adds JARVIS's manner to the system prompt:
+composed, dry British understatement, "sir" now and then, flight-check status reports, no verbatim film
+quotes. The voice picker now prefers British voices (Daniel, Oliver, Kate, Serena); download a Premium
+one in System Settings → Accessibility → Spoken Content for the full effect.
+
+**Coming home.** When Jarvis sees your home Wi-Fi after 20+ minutes away (or wakes from sleep at
+home), an *arrival window* opens for `wake.arrivalWindowMinutes` (10). During it:
+
+- saying **"Wake up, Daddy's home"** (or just "Daddy's home") runs the **homecoming scene**;
+- saying **"Hey Jarvis"** also runs it (`wake.homecomingOnHeyJarvis`), once; the next "Hey Jarvis" is a normal turn.
+
+Outside the window "Hey Jarvis" behaves as usual, and *"I'm home"* in any conversation runs the scene
+through the `welcome_home` tool. The scene: full-screen HUD, a welcome line in character, Home mode,
+then today's status.
+
+How the second phrase works, honestly: openWakeWord only ships trained models for a few phrases, so
+"Daddy's home" is spotted with on-device SpeechAnalyzer running on the mic stream. That costs about
+**28 % CPU** while it runs, which is why it only runs inside the arrival window (`wake.alwaysSpotPhrases`
+turns it on permanently if you accept the cost). Phrases and aliases live in `profile.json → wake.phrases`.
+
+**Full-screen HUD.** An arc reactor that spins faster while thinking and pulses with your voice, grid
+backdrop, flight-check readouts (time, power, memory, disk, mode) on the left, today's items on the
+right, transcript and reply along the bottom. Click or press Esc to dismiss; it fades on its own
+`hud.dismissAfterSeconds` after a turn. It appears for scenes by default; *Full-Screen HUD for Every
+Conversation* in the menu (or "Jarvis, full screen" → `set_display_mode`) makes every turn take the
+screen. Reduce Motion freezes the rings.
+
+Test hooks: write `!homecoming` or `!arrive` to `~/Library/Application Support/Jarvis/ask.txt` and
+`kill -INFO $(pgrep -x Jarvis)`.
+
 ## Safety model (enforced in code, Milestone 4)
 
 Every tool call goes through `ToolDispatcher` ([Permissions/ToolDispatcher.swift](Sources/JarvisCore/Permissions/ToolDispatcher.swift)), in this order:
@@ -381,6 +413,14 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.7.0 — Iron Man mode (2026-11-05)
+- JARVIS persona in the system prompt, British voice preference.
+- `PhraseSpotter`: extra wake phrases via on-device speech recognition, active only during an arrival window (home Wi-Fi after being away, or wake from sleep at home). "Hey Jarvis" during the window also triggers the homecoming.
+- `SceneDirector` with the homecoming scene; `welcome_home` and `set_display_mode` tools.
+- Full-screen HUD (`HUDView`, `HUDWindowController`): arc reactor, readouts, transcript/reply, Esc/click to dismiss, optional always-on.
+- Fixes: launching at home no longer counts as an arrival; a debounced homecoming lets "Hey Jarvis" fall through to a normal turn.
+- 72 tests.
 
 ### 0.6.0 — Milestone 6 (2026-11-05)
 - Context detection (Core Location, CoreWLAN SSID, power, displays, current calendar event) + pure `ModeScorer`; automatic mode switching with a manual-override window; `remember_place` writes `modes.json`.

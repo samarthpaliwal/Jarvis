@@ -83,6 +83,13 @@ public final class ContextDetector: NSObject, ObservableObject, CLLocationManage
     @Published public private(set) var lastVerdict: ModeScorer.Verdict?
 
     public var onChange: ((ContextSignals) -> Void)?
+    /// Fired when the home place is seen after ≥ 20 min away (or after waking from sleep at home).
+    public var onArrivedHome: ((String) -> Void)?
+    public var homePlaceIDs: () -> [String] = { ["home"] }
+    public var homePlaces: () -> [Place] = { [] }
+    private var lastHomeSeen: Date?
+    private var wokeRecently = false
+    private let launchedAt = Date()
     private let location = CLLocationManager()
     private let calendar: CalendarService
     private var timer: Timer?
@@ -107,7 +114,12 @@ public final class ContextDetector: NSObject, ObservableObject, CLLocationManage
             Task { @MainActor in await self?.refresh(reason: "displays") }
         })
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in try? await Task.sleep(for: .seconds(5)); await self?.refresh(reason: "wake") }
+            Task { @MainActor in
+                self?.wokeRecently = true
+                try? await Task.sleep(for: .seconds(5))
+                await self?.refresh(reason: "wake")
+                self?.wokeRecently = false
+            }
         })
         Task { await refresh(reason: "start") }
     }
@@ -128,6 +140,15 @@ public final class ContextDetector: NSObject, ObservableObject, CLLocationManage
         if let events = try? await calendar.events(from: Date().addingTimeInterval(-10 * 60), to: Date().addingTimeInterval(10 * 60)),
            let current = events.first(where: { !$0.isAllDay }) {
             s.currentEventTitle = current.title
+        }
+        let atHome = !ModeScorer.matchedPlaces(s, places: homePlaces()).isEmpty
+        if atHome {
+            // Launching the app while already at home is not an arrival.
+            let awayLongEnough = lastHomeSeen.map { Date().timeIntervalSince($0) > 20 * 60 } ?? (Date().timeIntervalSince(launchedAt) > 120)
+            if awayLongEnough || (wokeRecently && reason == "wake") {
+                onArrivedHome?(awayLongEnough ? "home Wi-Fi after being away" : "woke from sleep at home")
+            }
+            lastHomeSeen = Date()
         }
         if s != signals {
             signals = s

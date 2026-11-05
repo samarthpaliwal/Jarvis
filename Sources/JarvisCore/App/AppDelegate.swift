@@ -27,6 +27,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var modeSetup: ModeSetupApplier!
     public private(set) var proactive: ProactiveScheduler!
     public private(set) var moveLog: MoveLog!
+    public private(set) var hud: HUDWindowController!
+    public private(set) var spotter: PhraseSpotter!
+    public private(set) var scenes: SceneDirector!
     private var edgeGlow: EdgeGlowWindowController!
     private var debugSignals: DebugSignals?
 
@@ -90,8 +93,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),
         ])
         brain = Brain(dispatcher: dispatcher, config: config, modes: modes, undo: undo)
+        hud = HUDWindowController(model: notch, dismissAfter: config.profile.hud?.dismissAfterSeconds ?? 8)
         conversation = ConversationController(notch: notch, wake: wake, transcriber: transcriber,
                                               speech: speech, config: config, modes: modes, brain: brain)
+        dispatcher.register([SetDisplayModeTool(hud: hud), WelcomeHomeTool(run: { [weak self] in self?.scenes.homecoming(trigger: "voice") })])
         dispatcher.approvalHandler = { [weak self] request in await self?.conversation.requestApproval(request) ?? false }
         dispatcher.onSummary = { summary in JarvisLog.info("Action: \(summary)") }
         timers.onFire = { [weak self] entry in self?.conversation.deliver("Timer’s up: \(entry.label).") }
@@ -109,10 +114,34 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.conversation.deliver(text, cards: cards)
         }
         proactive.start()
+
+        // Scenes, second wake phrase, arrival window.
+        scenes = SceneDirector(conversation: conversation, hud: hud, briefing: briefing, modes: modes, config: config)
+        let spotTranscriber = TranscriberFactory.make(locale: Locale(identifier: config.profile.speech?.locale ?? "en-US"))
+        spotter = PhraseSpotter(transcriber: spotTranscriber, phrases: config.profile.wake?.phrases ?? [])
+        spotter.onHit = { [weak self] hit in self?.scenes.run(hit.scene, trigger: "phrase “\(hit.phrase)”") }
+        conversation.extraAudioTap = { [weak self] chunk in self?.spotter.append(chunk) }
+        conversation.onTurnActive = { [weak self] active in
+            if active { self?.spotter.pause() } else { self?.spotter.resumeIfWindowOpen() }
+        }
+        conversation.homecomingIfArriving = { [weak self] in
+            guard let self, self.config.profile.wake?.homecomingOnHeyJarvis ?? true,
+                  let until = self.spotter.activeUntil, until > Date() else { return false }
+            guard self.scenes.homecoming(trigger: "Hey Jarvis during arrival window") else { return false }
+            self.spotter.stop(reason: "homecoming via Hey Jarvis")
+            return true
+        }
+        context.homePlaces = { [weak self] in self?.config.modes.places.filter { $0.id == "home" } ?? [] }
+        context.onArrivedHome = { [weak self] why in
+            guard let self else { return }
+            self.spotter.openWindow(minutes: self.config.profile.wake?.arrivalWindowMinutes ?? 10, reason: why)
+        }
+        if config.profile.wake?.alwaysSpotPhrases ?? false { spotter.start() }
+        Task { _ = await spotTranscriber.requestAuthorization() }
         menuBar = MenuBarController(config: config, notch: notch, notchWindow: notchWindow, modes: modes,
                                     demo: demo, wake: wake, conversation: conversation, speech: speech, brain: brain, log: actionLog,
                                     googleAuth: googleAuth, notion: notion, briefing: briefing,
-                                    proactive: proactive, context: context)
+                                    proactive: proactive, context: context, hud: hud, scenes: scenes)
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() == nil ? "MISSING" : "present")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
                                     onBriefing: { [weak self] in
@@ -129,6 +158,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                         let askURL = ConfigLocator.userConfigDirectory.deletingLastPathComponent().appendingPathComponent("ask.txt")
                                         if let q = try? String(contentsOf: askURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !q.isEmpty {
                                             try? FileManager.default.removeItem(at: askURL)
+                                            if q == "!homecoming" { self.scenes.homecoming(trigger: "debug"); return }
+                                            if q == "!arrive" { self.spotter.openWindow(minutes: 10, reason: "debug"); return }
                                             JarvisLog.info("Text turn: “\(q)”")
                                             self.conversation.ask(q)
                                             return

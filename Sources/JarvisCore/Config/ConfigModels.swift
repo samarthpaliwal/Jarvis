@@ -16,6 +16,45 @@ public struct Profile: Codable, Equatable {
         public var spokenReplyMaxSentences: Int
         public var voiceIdentifier: String?
         public var speechRate: Double
+        /// "ironman" adds the JARVIS mannerisms to the system prompt.
+        public var persona: String?
+    }
+    public struct WakePhrase: Codable, Equatable {
+        public var phrase: String
+        public var aliases: [String]
+        public var scene: String
+    }
+    public struct Wake: Codable, Equatable {
+        public var phrases: [WakePhrase]
+        public var arrivalWindowMinutes: Int
+        public var alwaysSpotPhrases: Bool
+        public var homecomingOnHeyJarvis: Bool
+        private enum CodingKeys: String, CodingKey { case phrases, arrivalWindowMinutes, alwaysSpotPhrases, homecomingOnHeyJarvis }
+        public init(phrases: [WakePhrase] = [], arrivalWindowMinutes: Int = 10, alwaysSpotPhrases: Bool = false, homecomingOnHeyJarvis: Bool = true) {
+            self.phrases = phrases; self.arrivalWindowMinutes = arrivalWindowMinutes; self.alwaysSpotPhrases = alwaysSpotPhrases; self.homecomingOnHeyJarvis = homecomingOnHeyJarvis
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            phrases = try c.decodeIfPresent([WakePhrase].self, forKey: .phrases) ?? []
+            arrivalWindowMinutes = try c.decodeIfPresent(Int.self, forKey: .arrivalWindowMinutes) ?? 10
+            alwaysSpotPhrases = try c.decodeIfPresent(Bool.self, forKey: .alwaysSpotPhrases) ?? false
+            homecomingOnHeyJarvis = try c.decodeIfPresent(Bool.self, forKey: .homecomingOnHeyJarvis) ?? true
+        }
+    }
+    public struct HUD: Codable, Equatable {
+        public var fullScreenAlways: Bool
+        public var fullScreenForScenes: Bool
+        public var dismissAfterSeconds: Double
+        private enum CodingKeys: String, CodingKey { case fullScreenAlways, fullScreenForScenes, dismissAfterSeconds }
+        public init(fullScreenAlways: Bool = false, fullScreenForScenes: Bool = true, dismissAfterSeconds: Double = 8) {
+            self.fullScreenAlways = fullScreenAlways; self.fullScreenForScenes = fullScreenForScenes; self.dismissAfterSeconds = dismissAfterSeconds
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            fullScreenAlways = try c.decodeIfPresent(Bool.self, forKey: .fullScreenAlways) ?? false
+            fullScreenForScenes = try c.decodeIfPresent(Bool.self, forKey: .fullScreenForScenes) ?? true
+            dismissAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .dismissAfterSeconds) ?? 8
+        }
     }
     public struct Briefing: Codable, Equatable {
         public var time: String
@@ -120,6 +159,8 @@ public struct Profile: Codable, Equatable {
     public var dataSources: DataSources
     public var proactive: Proactive
     public var speech: Speech?
+    public var wake: Wake?
+    public var hud: HUD?
 
     /// Used when profile.json is missing or malformed so the app still launches.
     public static let fallback = Profile(
@@ -127,14 +168,16 @@ public struct Profile: Codable, Equatable {
         graduationYear: 2029, goal: "software engineering internship",
         homeTimeZone: "America/Phoenix", secondaryTimeZone: "Asia/Singapore",
         routine: Routine(workoutStart: "06:00", workoutEnd: "06:30", transport: "bike"),
-        assistant: Assistant(name: "Jarvis", addressUserAs: "Sam", tone: "warm, quick, lightly witty",
-                             spokenReplyMaxSentences: 2, voiceIdentifier: nil, speechRate: 0.52),
+        assistant: Assistant(name: "Jarvis", addressUserAs: "Sam", tone: "JARVIS from Iron Man: composed, dry British wit, unflappable",
+                             spokenReplyMaxSentences: 2, voiceIdentifier: nil, speechRate: 0.52, persona: "ironman"),
         briefing: Briefing(time: "07:00", onFirstUnlock: true, examLookaheadDays: 14, deadlineCount: 3, nudgeDaysBefore: [7, 3, 1, 0]),
         claude: Claude(model: "claude-sonnet-5-5", maxTokens: 1024),
         dataSources: DataSources(calendar: "eventkit", email: "gmail",
                                  notion: Notion(), codeFolders: ["~/Developer"]),
         proactive: Proactive(breakReminders: false, breakAfterMinutes: 90, quietHoursStart: "22:30", quietHoursEnd: "06:00"),
-        speech: Speech(locale: "en-US", silenceEndSeconds: 1.3, noSpeechTimeoutSeconds: 6, maxUtteranceSeconds: 20)
+        speech: Speech(locale: "en-US", silenceEndSeconds: 1.3, noSpeechTimeoutSeconds: 6, maxUtteranceSeconds: 20),
+        wake: Wake(phrases: [WakePhrase(phrase: "wake up daddy's home", aliases: ["daddy's home", "daddy is home"], scene: "homecoming")]),
+        hud: HUD()
     )
 }
 
