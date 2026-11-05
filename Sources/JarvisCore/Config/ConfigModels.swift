@@ -1,0 +1,253 @@
+import Foundation
+
+// MARK: - profile.json
+
+/// Personal facts about the user. Everything here is editable in config/profile.json.
+public struct Profile: Codable, Equatable {
+    public struct Routine: Codable, Equatable {
+        public var workoutStart: String
+        public var workoutEnd: String
+        public var transport: String
+    }
+    public struct Assistant: Codable, Equatable {
+        public var name: String
+        public var addressUserAs: String
+        public var tone: String
+        public var spokenReplyMaxSentences: Int
+        public var voiceIdentifier: String?
+        public var speechRate: Double
+    }
+    public struct Briefing: Codable, Equatable {
+        public var time: String
+        public var onFirstUnlock: Bool
+        public var examLookaheadDays: Int
+        public var deadlineCount: Int
+        public var nudgeDaysBefore: [Int]
+    }
+    public struct Claude: Codable, Equatable {
+        public var model: String
+        public var maxTokens: Int
+    }
+    /// Notion data source ids + property names. All optional with Student OS defaults so older configs parse.
+    public struct Notion: Codable, Equatable {
+        public var homeworkDataSourceId: String = ""
+        public var examsDataSourceId: String = ""
+        public var classesDataSourceId: String = ""
+        public var notesParentPageId: String = ""
+        public var homeworkTitleProperty: String = "Assignment"
+        public var homeworkDueProperty: String = "Due"
+        public var homeworkStatusProperty: String = "Status"
+        public var homeworkDoneValues: [String] = ["Submitted", "Graded"]
+        public var examsTitleProperty: String = "Exam"
+        public var examsDateProperty: String = "Date"
+
+        public init() {}
+
+        private enum CodingKeys: String, CodingKey {
+            case homeworkDataSourceId, examsDataSourceId, classesDataSourceId, notesParentPageId
+            case homeworkTitleProperty, homeworkDueProperty, homeworkStatusProperty, homeworkDoneValues, examsTitleProperty, examsDateProperty
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            homeworkDataSourceId = try c.decodeIfPresent(String.self, forKey: .homeworkDataSourceId) ?? ""
+            examsDataSourceId = try c.decodeIfPresent(String.self, forKey: .examsDataSourceId) ?? ""
+            classesDataSourceId = try c.decodeIfPresent(String.self, forKey: .classesDataSourceId) ?? ""
+            notesParentPageId = try c.decodeIfPresent(String.self, forKey: .notesParentPageId) ?? ""
+            homeworkTitleProperty = try c.decodeIfPresent(String.self, forKey: .homeworkTitleProperty) ?? "Assignment"
+            homeworkDueProperty = try c.decodeIfPresent(String.self, forKey: .homeworkDueProperty) ?? "Due"
+            homeworkStatusProperty = try c.decodeIfPresent(String.self, forKey: .homeworkStatusProperty) ?? "Status"
+            homeworkDoneValues = try c.decodeIfPresent([String].self, forKey: .homeworkDoneValues) ?? ["Submitted", "Graded"]
+            examsTitleProperty = try c.decodeIfPresent(String.self, forKey: .examsTitleProperty) ?? "Exam"
+            examsDateProperty = try c.decodeIfPresent(String.self, forKey: .examsDateProperty) ?? "Date"
+        }
+    }
+    public struct DataSources: Codable, Equatable {
+        public var calendar: String
+        public var email: String
+        public var notion: Notion
+        public var codeFolders: [String]
+    }
+    /// Optional so configs written before Milestone 3 still parse.
+    public struct Speech: Codable, Equatable {
+        public var locale: String
+        public var silenceEndSeconds: Double
+        public var noSpeechTimeoutSeconds: Double
+        public var maxUtteranceSeconds: Double
+    }
+    public struct Proactive: Codable, Equatable {
+        public var breakReminders: Bool
+        public var breakAfterMinutes: Int
+        public var quietHoursStart: String
+        public var quietHoursEnd: String
+        public var autoModes: Bool = true
+        public var manualOverrideHours: Double = 2
+        public var callApps: [String] = PresenceDetector.defaultCallApps
+
+        public init(breakReminders: Bool, breakAfterMinutes: Int, quietHoursStart: String, quietHoursEnd: String,
+                    autoModes: Bool = true, manualOverrideHours: Double = 2, callApps: [String] = PresenceDetector.defaultCallApps) {
+            self.breakReminders = breakReminders; self.breakAfterMinutes = breakAfterMinutes
+            self.quietHoursStart = quietHoursStart; self.quietHoursEnd = quietHoursEnd
+            self.autoModes = autoModes; self.manualOverrideHours = manualOverrideHours; self.callApps = callApps
+        }
+
+        private enum CodingKeys: String, CodingKey { case breakReminders, breakAfterMinutes, quietHoursStart, quietHoursEnd, autoModes, manualOverrideHours, callApps }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            breakReminders = try c.decodeIfPresent(Bool.self, forKey: .breakReminders) ?? false
+            breakAfterMinutes = try c.decodeIfPresent(Int.self, forKey: .breakAfterMinutes) ?? 90
+            quietHoursStart = try c.decodeIfPresent(String.self, forKey: .quietHoursStart) ?? "22:30"
+            quietHoursEnd = try c.decodeIfPresent(String.self, forKey: .quietHoursEnd) ?? "06:00"
+            autoModes = try c.decodeIfPresent(Bool.self, forKey: .autoModes) ?? true
+            manualOverrideHours = try c.decodeIfPresent(Double.self, forKey: .manualOverrideHours) ?? 2
+            callApps = try c.decodeIfPresent([String].self, forKey: .callApps) ?? PresenceDetector.defaultCallApps
+        }
+    }
+
+    public var name: String
+    public var fullName: String
+    public var school: String
+    public var city: String
+    public var graduationYear: Int
+    public var goal: String
+    public var homeTimeZone: String
+    public var secondaryTimeZone: String
+    public var routine: Routine
+    public var assistant: Assistant
+    public var briefing: Briefing
+    public var claude: Claude
+    public var dataSources: DataSources
+    public var proactive: Proactive
+    public var speech: Speech?
+
+    /// Used when profile.json is missing or malformed so the app still launches.
+    public static let fallback = Profile(
+        name: "Sam", fullName: "Samarth", school: "University of Arizona", city: "Tucson",
+        graduationYear: 2029, goal: "software engineering internship",
+        homeTimeZone: "America/Phoenix", secondaryTimeZone: "Asia/Singapore",
+        routine: Routine(workoutStart: "06:00", workoutEnd: "06:30", transport: "bike"),
+        assistant: Assistant(name: "Jarvis", addressUserAs: "Sam", tone: "warm, quick, lightly witty",
+                             spokenReplyMaxSentences: 2, voiceIdentifier: nil, speechRate: 0.52),
+        briefing: Briefing(time: "07:00", onFirstUnlock: true, examLookaheadDays: 14, deadlineCount: 3, nudgeDaysBefore: [7, 3, 1, 0]),
+        claude: Claude(model: "claude-sonnet-5-5", maxTokens: 1024),
+        dataSources: DataSources(calendar: "eventkit", email: "gmail",
+                                 notion: Notion(), codeFolders: ["~/Developer"]),
+        proactive: Proactive(breakReminders: false, breakAfterMinutes: 90, quietHoursStart: "22:30", quietHoursEnd: "06:00"),
+        speech: Speech(locale: "en-US", silenceEndSeconds: 1.3, noSpeechTimeoutSeconds: 6, maxUtteranceSeconds: 20)
+    )
+}
+
+// MARK: - allowed-folders.json
+
+public struct AllowedFolders: Codable, Equatable, Sendable {
+    public var read: [String]
+    public var organize: [String]
+    public var sortedFolderName: String
+    public var largeFileMB: Int
+    public var oldFileDays: Int
+
+    public static let fallback = AllowedFolders(read: ["~/Developer", "~/Desktop", "~/Downloads", "~/Documents"],
+                                                organize: ["~/Desktop", "~/Downloads"],
+                                                sortedFolderName: "Sorted", largeFileMB: 500, oldFileDays: 90)
+}
+
+// MARK: - denylist.json  (Tier 3)
+
+public struct Denylist: Codable, Equatable, Sendable {
+    public var paths: [String]
+    public var filePatterns: [String]
+    public var apps: [String]
+    public var shellPatterns: [String]
+
+    private enum CodingKeys: String, CodingKey { case paths, filePatterns, apps, shellPatterns }
+
+    public init(paths: [String], filePatterns: [String], apps: [String], shellPatterns: [String]) {
+        self.paths = paths; self.filePatterns = filePatterns; self.apps = apps; self.shellPatterns = shellPatterns
+    }
+
+    /// The hard floor: even if denylist.json is deleted, these stay denied.
+    public static let fallback = Denylist(
+        paths: ["~/.ssh", "~/Library/Keychains", "~/.aws", "~/.gnupg", "/System", "/Library", "/private", "/etc", "/usr"],
+        filePatterns: [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "credentials.json"],
+        apps: ["Keychain Access", "1Password", "Passwords"],
+        shellPatterns: ["sudo", "rm -rf /", "mkfs", "csrutil", "security ", "| sh", "| bash"]
+    )
+}
+
+// MARK: - modes.json
+
+public struct Place: Codable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    public var latitude: Double?
+    public var longitude: Double?
+    public var radiusMeters: Double
+    public var wifiSSIDs: [String]
+}
+
+public struct ModeDefinition: Codable, Equatable, Identifiable {
+    public struct Triggers: Codable, Equatable {
+        public var places: [String]
+        public var pluggedIn: Bool?
+        public var externalDisplay: Bool?
+        public var calendarKeywords: [String]
+    }
+    public struct Voice: Codable, Equatable {
+        public var enabled: Bool
+        public var volume: Double
+    }
+    public struct Notch: Codable, Equatable {
+        public var glow: Double
+        public var showFullDay: Bool
+    }
+    /// What Jarvis applies automatically on entering the mode. All reversible, all Tier 1.
+    public struct Setup: Codable, Equatable {
+        public var focus: String?
+        public var volume: Double?
+        public var brightness: Double?
+        public var quitApps: [String]
+        public var hideApps: [String]
+        public var openApps: [String]
+        public var muteNotifications: Bool
+    }
+
+    public var id: String
+    public var name: String
+    public var icon: String
+    public var triggers: Triggers
+    public var voice: Voice
+    public var notch: Notch
+    public var briefing: [String]
+    public var holdNotifications: Bool
+    public var pollingMinutes: Int
+    public var allowedTools: [String]
+    public var lowBatteryWarnPercent: Int?
+    public var setup: Setup
+}
+
+public struct ModesConfig: Codable, Equatable {
+    public var defaultMode: String
+    public var places: [Place]
+    public var modes: [ModeDefinition]
+
+    private enum CodingKeys: String, CodingKey { case defaultMode, places, modes }
+
+    public init(defaultMode: String, places: [Place], modes: [ModeDefinition]) {
+        self.defaultMode = defaultMode; self.places = places; self.modes = modes
+    }
+
+    public func mode(id: String) -> ModeDefinition? { modes.first { $0.id == id } }
+
+    public static let fallback = ModesConfig(
+        defaultMode: "home",
+        places: [],
+        modes: [ModeDefinition(
+            id: "home", name: "Home", icon: "house.fill",
+            triggers: .init(places: [], pluggedIn: nil, externalDisplay: nil, calendarKeywords: []),
+            voice: .init(enabled: true, volume: 0.8), notch: .init(glow: 1, showFullDay: true),
+            briefing: ["tasks", "deadlines", "exams"], holdNotifications: false, pollingMinutes: 10,
+            allowedTools: ["*"], lowBatteryWarnPercent: nil,
+            setup: .init(focus: nil, volume: nil, brightness: nil, quitApps: [], hideApps: [], openApps: [], muteNotifications: false))]
+    )
+}

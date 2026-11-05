@@ -1,0 +1,270 @@
+{
+  "_comment": "Edit freely. Places can also be added by voice: 'Jarvis, remember this place as the gym'. Coordinates null = unknown until taught.",
+  "defaultMode": "home",
+  "places": [
+    {
+      "id": "home",
+      "name": "Home (Honors Village)",
+      "latitude": null,
+      "longitude": null,
+      "radiusMeters": 150,
+      "wifiSSIDs": [
+        "5G Honors"
+      ]
+    },
+    {
+      "id": "campus",
+      "name": "University of Arizona",
+      "latitude": 32.2319,
+      "longitude": -110.9501,
+      "radiusMeters": 1200,
+      "wifiSSIDs": [
+        "UAWiFi",
+        "eduroam"
+      ]
+    },
+    {
+      "id": "work",
+      "name": "Work",
+      "latitude": null,
+      "longitude": null,
+      "radiusMeters": 200,
+      "wifiSSIDs": []
+    }
+  ],
+  "modes": [
+    {
+      "id": "home",
+      "name": "Home",
+      "icon": "house.fill",
+      "triggers": {
+        "places": [
+          "home"
+        ],
+        "pluggedIn": true,
+        "externalDisplay": true,
+        "calendarKeywords": []
+      },
+      "voice": {
+        "enabled": true,
+        "volume": 0.9
+      },
+      "notch": {
+        "glow": 1.0,
+        "showFullDay": true
+      },
+      "briefing": [
+        "tasks",
+        "deadlines",
+        "exams",
+        "maintenance"
+      ],
+      "holdNotifications": false,
+      "pollingMinutes": 10,
+      "allowedTools": [
+        "*"
+      ],
+      "setup": {
+        "focus": null,
+        "volume": null,
+        "brightness": null,
+        "quitApps": [],
+        "hideApps": [],
+        "openApps": [],
+        "muteNotifications": false
+      }
+    },
+    {
+      "id": "class",
+      "name": "Class",
+      "icon": "graduationcap.fill",
+      "triggers": {
+        "places": [
+          "campus"
+        ],
+        "pluggedIn": null,
+        "externalDisplay": null,
+        "calendarKeywords": [
+          "lecture",
+          "class",
+          "CSC",
+          "MATH",
+          "ENGL",
+          "section",
+          "lab"
+        ]
+      },
+      "voice": {
+        "enabled": false,
+        "volume": 0.0
+      },
+      "notch": {
+        "glow": 0.4,
+        "showFullDay": false
+      },
+      "briefing": [
+        "nextClass",
+        "assignmentsDue"
+      ],
+      "holdNotifications": true,
+      "pollingMinutes": 15,
+      "allowedTools": [
+        "*"
+      ],
+      "setup": {
+        "focus": "Do Not Disturb",
+        "volume": 0.0,
+        "brightness": 0.6,
+        "quitApps": [
+          "Discord"
+        ],
+        "hideApps": [
+          "Messages",
+          "Spotify"
+        ],
+        "openApps": [
+          "Notes"
+        ],
+        "muteNotifications": true
+      }
+    },
+    {
+      "id": "study",
+      "name": "Study",
+      "icon": "book.fill",
+      "triggers": {
+        "places": [],
+        "pluggedIn": null,
+        "externalDisplay": null,
+        "calendarKeywords": [
+          "study",
+          "homework",
+          "focus"
+        ]
+      },
+      "voice": {
+        "enabled": true,
+        "volume": 0.5
+      },
+      "notch": {
+        "glow": 0.6,
+        "showFullDay": false
+      },
+      "briefing": [
+        "tasks",
+        "deadlines",
+        "exams"
+      ],
+      "holdNotifications": true,
+      "pollingMinutes": 15,
+      "allowedTools": [
+        "*"
+      ],
+      "setup": {
+        "focus": "Do Not Disturb",
+        "volume": 0.3,
+        "brightness": null,
+        "quitApps": [
+          "Discord"
+        ],
+        "hideApps": [
+          "Messages"
+        ],
+        "openApps": [
+          "Notes",
+          "FocusTutor"
+        ],
+        "muteNotifications": true
+      }
+    },
+    {
+      "id": "work",
+      "name": "Work",
+      "icon": "briefcase.fill",
+      "triggers": {
+        "places": [
+          "work"
+        ],
+        "pluggedIn": null,
+        "externalDisplay": null,
+        "calendarKeywords": [
+          "work",
+          "shift",
+          "standup",
+          "internship"
+        ]
+      },
+      "voice": {
+        "enabled": true,
+        "volume": 0.6
+      },
+      "notch": {
+        "glow": 0.7,
+        "showFullDay": false
+      },
+      "briefing": [
+        "tasks",
+        "deadlines"
+      ],
+      "holdNotifications": true,
+      "pollingMinutes": 10,
+      "allowedTools": [
+        "*"
+      ],
+      "setup": {
+        "focus": "Work",
+        "volume": null,
+        "brightness": null,
+        "quitApps": [],
+        "hideApps": [
+          "Messages"
+        ],
+        "openApps": [],
+        "muteNotifications": true
+      }
+    },
+    {
+      "id": "road",
+      "name": "Road",
+      "icon": "bicycle",
+      "triggers": {
+        "places": [],
+        "pluggedIn": false,
+        "externalDisplay": false,
+        "calendarKeywords": [
+          "flight",
+          "travel",
+          "airport"
+        ]
+      },
+      "voice": {
+        "enabled": true,
+        "volume": 0.7
+      },
+      "notch": {
+        "glow": 0.3,
+        "showFullDay": false
+      },
+      "briefing": [
+        "tasks",
+        "deadlines",
+        "battery"
+      ],
+      "holdNotifications": false,
+      "pollingMinutes": 30,
+      "allowedTools": [
+        "*"
+      ],
+      "lowBatteryWarnPercent": 25,
+      "setup": {
+        "focus": null,
+        "volume": null,
+        "brightness": 0.5,
+        "quitApps": [],
+        "hideApps": [],
+        "openApps": [],
+        "muteNotifications": false
+      }
+    }
+  ]
+}

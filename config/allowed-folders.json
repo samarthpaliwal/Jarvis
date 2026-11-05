@@ -1,0 +1,7 @@
+{
+  "read": ["~/Developer", "~/Desktop", "~/Downloads", "~/Documents"],
+  "organize": ["~/Desktop", "~/Downloads"],
+  "sortedFolderName": "Sorted",
+  "largeFileMB": 500,
+  "oldFileDays": 90
+}
