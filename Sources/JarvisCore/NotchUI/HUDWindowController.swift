@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor
 public final class HUDWindowController: ObservableObject {
     @Published public private(set) var isShowing = false
-    public var readouts: HUDReadouts = .empty { didSet { rebuild() } }
+    public var readouts: HUDReadouts = .empty { didSet { if hosting != nil { rebuild() } } }
     /// Whether every conversation should take the whole screen (menu toggle / voice).
     @Published public var fullScreenAlways: Bool = UserDefaults.standard.bool(forKey: "jarvis.hudAlways") {
         didSet { UserDefaults.standard.set(fullScreenAlways, forKey: "jarvis.hudAlways") }
@@ -37,7 +37,6 @@ public final class HUDWindowController: ObservableObject {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
-        rebuild()
 
         // Follow the conversation when "always" is on.
         model.$phase.removeDuplicates().sink { [weak self] phase in
@@ -62,6 +61,7 @@ public final class HUDWindowController: ObservableObject {
     public func show(scene: Bool) {
         pinnedForScene = scene || pinnedForScene
         guard let screen = NotchGeometry.screen(named: preferredDisplay) ?? NotchGeometry.preferredScreen() else { return }
+        if hosting == nil { rebuild() }
         panel.setFrame(screen.frame, display: true)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -104,8 +104,12 @@ public final class HUDWindowController: ObservableObject {
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             Task { @MainActor in
-                self?.panel.orderOut(nil)
-                self?.isShowing = false
+                guard let self else { return }
+                self.panel.orderOut(nil)
+                self.isShowing = false
+                // Tear down the view tree: a hidden TimelineView keeps animating and burns CPU.
+                self.panel.contentView = nil
+                self.hosting = nil
             }
         })
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }

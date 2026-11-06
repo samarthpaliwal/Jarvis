@@ -458,6 +458,10 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 
 ## Changelog
 
+### 0.8.1 — Mic fix (2026-11-06)
+- Fixed: after the input switched between AirPods and the built-in mic, the audio tap could go silent, so "Hey Jarvis" was never heard while typed commands still worked. Capture now builds a fresh `AVAudioEngine` on every restart, and a watchdog rebuilds it if no audio arrives for 6 seconds.
+- Fixed: the hidden HUD kept animating at 30 fps (~13 % CPU). Its view tree is now torn down when dismissed.
+
 ### 0.8.0 — OpenJarvis port (2026-11-06)
 - Persistent memory (MEMORY.md, USER.md, FTS5 conversation index) with `memory` and `memory_search` tools; injected into every turn.
 - LoopGuard, secret redaction of all tool output, prompt-injection labelling of untrusted content.

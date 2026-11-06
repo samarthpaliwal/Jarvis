@@ -33,7 +33,14 @@ public final class AudioCapture: @unchecked Sendable {
 
     public private(set) var isRunning = false
 
-    private let engine = AVAudioEngine()
+    /// Recreated on every restart: after an input-device switch (AirPods ↔ built-in mic) the old
+    /// engine can keep reporting the previous device's format and its tap silently stops firing.
+    private var engine = AVAudioEngine()
+    private var configObserver: Any?
+    private var watchdog: Timer?
+    /// Last time a chunk was delivered (capture queue writes, main reads; a stale read is harmless).
+    private var lastChunkAt = Date()
+    public private(set) var restarts = 0
     /// Inference runs here at utility QoS so it lands on efficiency cores. Measured: the same
     /// ~3% in Activity Monitor as a performance core, at lower energy. JARVIS_AUDIO_QOS=userInitiated
     /// moves it to a performance core for experiments.
@@ -62,16 +69,42 @@ public final class AudioCapture: @unchecked Sendable {
     public func start() throws {
         try installTapAndStart()
         if observers.isEmpty { observe() }
+        startWatchdog()
+    }
+
+    /// If no audio arrives for 6 s while we think we're running, rebuild the engine.
+    private func startWatchdog() {
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            guard let self, self.isRunning else { return }
+            if Date().timeIntervalSince(self.lastChunkAt) > 6 {
+                JarvisLog.warn("Audio watchdog: no microphone audio for 6 s; rebuilding the audio engine")
+                self.restart(reason: "watchdog: tap went silent")
+            }
+        }
     }
 
     public func stop() {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        watchdog?.invalidate()
+        watchdog = nil
+        teardownEngine()
         isRunning = false
         queue.async { self.pending.removeAll() }
     }
 
+    private func teardownEngine() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
+    }
+
     private func installTapAndStart() throws {
+        teardownEngine()
+        engine = AVAudioEngine()
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.restart(reason: "input device changed")
+        }
+        lastChunkAt = Date()
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw AudioCaptureError.noInputDevice }
@@ -115,6 +148,7 @@ public final class AudioCapture: @unchecked Sendable {
     }
 
     private func enqueue(_ samples: [Float]) {
+        lastChunkAt = Date()
         pending.append(contentsOf: samples)
         while pending.count >= Self.chunkSize {
             let chunk = Array(pending.prefix(Self.chunkSize))
@@ -131,10 +165,6 @@ public final class AudioCapture: @unchecked Sendable {
     }
 
     private func observe() {
-        let nc = NotificationCenter.default
-        observers.append(nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            self?.restart(reason: "input device changed")
-        })
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                                           object: nil, queue: .main) { [weak self] _ in
             // Give CoreAudio a moment to bring devices back after sleep.
@@ -144,7 +174,9 @@ public final class AudioCapture: @unchecked Sendable {
 
     private func restart(reason: String) {
         JarvisLog.info("Audio capture restarting (\(reason))")
-        stop()
+        restarts += 1
+        isRunning = false
+        queue.async { self.pending.removeAll() }
         do {
             try installTapAndStart()
             onStateChange?("restarted: \(reason)")
