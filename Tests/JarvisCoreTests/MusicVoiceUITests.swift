@@ -64,3 +64,35 @@ final class ScreenTests: XCTestCase {
         }
     }
 }
+
+final class KokoroTests: XCTestCase {
+    func testKokoroPayloadAndRequest() throws {
+        var v = Profile.Voice()
+        v.kokoroVoice = "bm_lewis"
+        let k = CloudSpeechOutput(provider: .kokoro, voice: v)
+        let body = k.payload(for: "Good evening, Sam.")
+        XCTAssertEqual(body["voice"] as? String, "bm_lewis")
+        XCTAssertEqual(body["input"] as? String, "Good evening, Sam.")
+        let (req, _) = k.requestBody()
+        XCTAssertEqual(req?.url?.host, "127.0.0.1")
+        XCTAssertNil(req?.value(forHTTPHeaderField: "Authorization"), "local voice needs no key")
+        XCTAssertTrue(k.name.contains("Kokoro"))
+    }
+
+    func testRouterPrefersKokoroWhenNoKeysAndItIsReady() {
+        let router = SpeechRouter(apple: AppleSpeechOutput(preferredVoice: nil))
+        router.kokoroReady = { true }
+        var v = Profile.Voice(); v.engine = "kokoro"
+        router.configure(v)
+        XCTAssertTrue(router.engineName.contains("Kokoro"))
+        router.kokoroReady = { false }
+        router.configure(v)
+        XCTAssertTrue(router.engineName.contains("AVSpeech"), "falls back to Apple when Kokoro isn't running")
+    }
+
+    func testVoiceConfigDecodesKokoroDefaults() throws {
+        let v = try JSONDecoder().decode(Profile.Voice.self, from: Data(#"{"engine":"auto"}"#.utf8))
+        XCTAssertEqual(v.kokoroVoice, "bm_george")
+        XCTAssertEqual(v.kokoroSpeed, 1.0)
+    }
+}

@@ -385,7 +385,21 @@ Integrations → *Set Spotify Client…* (steps in the dialog). Without it, Jarv
 for the song so one click plays it.
 
 **Voice.** macOS hides its smoother Siri and Premium voices from third-party apps, so Jarvis on its own
-only gets the basic voices. For a natural JARVIS voice, add a cloud voice from the menu → Voice:
+only gets the basic voices. The default fix is free:
+
+**Kokoro (free, on-device, no key).** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is an
+Apache-2.0 neural voice that runs locally through `kokoro-onnx`. Install once (~200 MB):
+
+```bash
+scripts/setup-kokoro.sh
+```
+
+Jarvis then starts the voice server itself (127.0.0.1:8880 only) and stops it on quit. It works offline,
+nothing leaves the Mac, and there are no limits. Measured on the M4 Pro: about 0.6 s for a short sentence,
+1.9 s for ten seconds of speech; the server uses about 300 MB of memory. Pick the voice under Jarvis menu →
+Voice → Kokoro Voice: George (default), Lewis, Daniel, Fable (all British male), or American ones.
+
+Paid alternatives, also in the menu → Voice:
 - *Set ElevenLabs Key…* (most natural; default voice "Daniel", a deep British male; free tier available).
 - *Set OpenAI Key…* (gpt-4o-mini-tts, voice "fable", steered to sound like a calm British butler).
 
@@ -480,6 +494,9 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.9.1 — Free neural voice (2026-11-06)
+- Kokoro-82M on-device voice (free, offline, no key): `scripts/setup-kokoro.sh`, `voice/kokoro_server.py`, app-managed server with auto-restart. Auto engine order: ElevenLabs key → OpenAI key → Kokoro → Apple. British voices in the menu. 98 tests.
 
 ### 0.9.0 — Card, music, voice (2026-11-06)
 - Floating card on the active screen replaces the menu-bar notch overlay; halo off; HUD no longer on every turn.

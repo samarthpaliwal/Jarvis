@@ -133,11 +133,13 @@
     "halo": false
   },
   "voice": {
-    "_comment": "engine: auto, apple, elevenlabs, openai. Cloud voices send the reply text to that provider. Keys go in the Keychain via the Jarvis menu → Voice.",
+    "_comment": "engine: auto (ElevenLabs/OpenAI if a key is set, else the free on-device Kokoro voice, else Apple), kokoro, elevenlabs, openai, apple. Kokoro voices: bm_george, bm_lewis, bm_daniel, bm_fable (British male). Install Kokoro once with scripts/setup-kokoro.sh.",
     "engine": "auto",
     "elevenLabsVoiceId": "onwK4e9ZLuTAKqWW03F9",
     "elevenLabsModel": "eleven_flash_v2_5",
     "openAIVoice": "fable",
-    "openAIInstructions": "Speak as JARVIS: a refined British AI butler. Smooth, warm, calm and measured, with a hint of dry wit. Natural pacing, never robotic."
+    "openAIInstructions": "Speak as JARVIS: a refined British AI butler. Smooth, warm, calm and measured, with a hint of dry wit. Natural pacing, never robotic.",
+    "kokoroVoice": "bm_george",
+    "kokoroSpeed": 1.0
   }
 }

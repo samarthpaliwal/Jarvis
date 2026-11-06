@@ -4,13 +4,26 @@ import Foundation
 /// Neural text-to-speech from ElevenLabs or OpenAI, played sentence by sentence.
 /// The next sentence is fetched while the current one plays, so speech flows without gaps.
 public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDelegate, @unchecked Sendable {
-    public enum Provider: String, Sendable { case elevenlabs, openai }
+    public enum Provider: String, Sendable { case elevenlabs, openai, kokoro }
+    /// Where the local Kokoro server listens (set by the app).
+    public static var kokoroBaseURL = URL(string: "http://127.0.0.1:8880")!
+    private static let localSession: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.connectionProxyDictionary = [:]
+        return URLSession(configuration: c)
+    }()
     public static let elevenLabsKeyAccount = "ELEVENLABS_API_KEY"
     public static let openAIKeyAccount = "OPENAI_API_KEY"
 
     public let provider: Provider
     public var voiceSettings: Profile.Voice
-    public var name: String { provider == .elevenlabs ? "ElevenLabs (\(voiceSettings.elevenLabsModel))" : "OpenAI gpt-4o-mini-tts (\(voiceSettings.openAIVoice))" }
+    public var name: String {
+        switch provider {
+        case .elevenlabs: return "ElevenLabs (\(voiceSettings.elevenLabsModel))"
+        case .openai: return "OpenAI gpt-4o-mini-tts (\(voiceSettings.openAIVoice))"
+        case .kokoro: return "Kokoro on-device (\(voiceSettings.kokoroVoice))"
+        }
+    }
     public var isSpeaking: Bool { player?.isPlaying == true || !queue.isEmpty }
     /// Called (main queue) when a request fails, so the router can fall back to the Apple voice.
     public var onFailure: ((String, Error) -> Void)?
@@ -27,7 +40,11 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     }
 
     public static func hasKey(_ p: Provider) -> Bool {
-        KeychainStore.read(account: p == .elevenlabs ? elevenLabsKeyAccount : openAIKeyAccount) != nil
+        switch p {
+        case .elevenlabs: return KeychainStore.read(account: elevenLabsKeyAccount) != nil
+        case .openai: return KeychainStore.read(account: openAIKeyAccount) != nil
+        case .kokoro: return true
+        }
     }
 
     // MARK: SpeechOutput
@@ -119,6 +136,11 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
             r.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
             return (r, "")
+        case .kokoro:
+            var r = URLRequest(url: Self.kokoroBaseURL.appendingPathComponent("v1/audio/speech"))
+            r.httpMethod = "POST"
+            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            return (r, "")
         }
     }
 
@@ -130,6 +152,8 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
         case .openai:
             return ["model": "gpt-4o-mini-tts", "voice": voiceSettings.openAIVoice, "input": text,
                     "instructions": voiceSettings.openAIInstructions, "response_format": "mp3"]
+        case .kokoro:
+            return ["input": text, "voice": voiceSettings.kokoroVoice, "speed": voiceSettings.kokoroSpeed]
         }
     }
 
@@ -138,7 +162,7 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
         guard var req = base else { throw NSError(domain: "Jarvis.TTS", code: 1, userInfo: [NSLocalizedDescriptionKey: why]) }
         req.timeoutInterval = 15
         req.httpBody = try JSONSerialization.data(withJSONObject: payload(for: text))
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await (provider == .kokoro ? Self.localSession : URLSession.shared).data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200, !data.isEmpty else {
             let msg = String(data: data.prefix(300), encoding: .utf8) ?? ""
@@ -167,14 +191,19 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
     public var engineName: String { cloud?.name ?? apple.name }
 
     /// Re-reads config + Keychain. Call after keys or settings change.
+    /// Whether the local Kokoro server is up (set by the app).
+    public var kokoroReady: () -> Bool = { false }
+
     public func configure(_ v: Profile.Voice?) {
         let voice = v ?? Profile.Voice()
         let provider: CloudSpeechOutput.Provider?
+        let kokoro: CloudSpeechOutput.Provider? = kokoroReady() ? .kokoro : nil
         switch voice.engine {
-        case "elevenlabs": provider = CloudSpeechOutput.hasKey(.elevenlabs) ? .elevenlabs : nil
-        case "openai": provider = CloudSpeechOutput.hasKey(.openai) ? .openai : nil
+        case "elevenlabs": provider = CloudSpeechOutput.hasKey(.elevenlabs) ? .elevenlabs : kokoro
+        case "openai": provider = CloudSpeechOutput.hasKey(.openai) ? .openai : kokoro
+        case "kokoro": provider = kokoro
         case "apple": provider = nil
-        default: provider = CloudSpeechOutput.hasKey(.elevenlabs) ? .elevenlabs : CloudSpeechOutput.hasKey(.openai) ? .openai : nil
+        default: provider = CloudSpeechOutput.hasKey(.elevenlabs) ? .elevenlabs : CloudSpeechOutput.hasKey(.openai) ? .openai : kokoro
         }
         if let provider {
             let c = CloudSpeechOutput(provider: provider, voice: voice)
@@ -192,7 +221,7 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
     }
 
     private func pick() -> SpeechOutput {
-        if let cloud, isOnline() { return cloud }
+        if let cloud, cloud.provider == .kokoro || isOnline() { return cloud }   // Kokoro is local: works offline
         return apple
     }
 

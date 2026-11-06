@@ -14,6 +14,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     private let conversation: ConversationController
     private let speech: AppleSpeechOutput
     private let voice: SpeechRouter
+    private let kokoro: KokoroService
     private let spotify: SpotifySearch
     private let brain: Brain
     private let actionLog: ActionLog
@@ -33,7 +34,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
 
     public init(config: ConfigStore, notch: NotchViewModel, notchWindow: NotchWindowController,
                 modes: ModeManager, demo: DemoDriver, wake: WakeWordService,
-                conversation: ConversationController, speech: AppleSpeechOutput, voice: SpeechRouter, spotify: SpotifySearch, brain: Brain, log: ActionLog,
+                conversation: ConversationController, speech: AppleSpeechOutput, voice: SpeechRouter, kokoro: KokoroService, spotify: SpotifySearch, brain: Brain, log: ActionLog,
                 googleAuth: GoogleAuth, notion: NotionClient, briefing: BriefingService,
                 proactive: ProactiveScheduler, context: ContextDetector, hud: HUDWindowController, scenes: SceneDirector,
                 memory: MemoryStore, skills: SkillLibrary, local: OllamaClient, narrator: BriefingNarrator) {
@@ -48,6 +49,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         self.conversation = conversation
         self.speech = speech
         self.voice = voice
+        self.kokoro = kokoro
         self.spotify = spotify
         self.brain = brain
         self.actionLog = log
@@ -242,7 +244,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         eng.isEnabled = false
         voiceMenu.addItem(eng)
         let current = UserDefaults.standard.string(forKey: "jarvis.voiceEngine") ?? config.profile.voice?.engine ?? "auto"
-        for (id, label) in [("auto", "Best available (cloud if a key is set)"), ("elevenlabs", "ElevenLabs (most natural)"), ("openai", "OpenAI voice"), ("apple", "Apple on-device only")] {
+        for (id, label) in [("auto", "Best available"), ("kokoro", "Kokoro: free, on-device neural (\(kokoro.status))"),
+                            ("elevenlabs", "ElevenLabs (key needed)"), ("openai", "OpenAI (key needed)"), ("apple", "Apple basic voice")] {
             let item = ClosureMenuItem(title: label) { [voice, config, notch] in
                 UserDefaults.standard.set(id, forKey: "jarvis.voiceEngine")
                 voice.configure(AppDelegate.effectiveVoice(config.profile.voice))
@@ -251,6 +254,20 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             item.state = current == id ? .on : .off
             voiceMenu.addItem(item)
         }
+        let kv = UserDefaults.standard.string(forKey: "jarvis.kokoroVoice") ?? config.profile.voice?.kokoroVoice ?? "bm_george"
+        let kMenu = NSMenu()
+        for (id, label) in [("bm_george", "George (British, warm)"), ("bm_lewis", "Lewis (British, deeper)"), ("bm_daniel", "Daniel (British, crisp)"), ("bm_fable", "Fable (British, storyteller)"), ("am_michael", "Michael (American)"), ("am_onyx", "Onyx (American, deep)")] {
+            let item = ClosureMenuItem(title: label) { [voice, config, conversation] in
+                UserDefaults.standard.set(id, forKey: "jarvis.kokoroVoice")
+                voice.configure(AppDelegate.effectiveVoice(config.profile.voice))
+                conversation.deliver("Good evening, \(config.profile.assistant.addressUserAs). This is how I'll sound.")
+            }
+            item.state = kv == id ? .on : .off
+            kMenu.addItem(item)
+        }
+        let kItem = NSMenuItem(title: "Kokoro Voice", action: nil, keyEquivalent: "")
+        kItem.submenu = kMenu
+        voiceMenu.addItem(kItem)
         voiceMenu.addItem(ClosureMenuItem(title: "Set ElevenLabs Key…", symbol: "key") { [voice, config, notch] in
             MenuBarController.promptForSecret(title: "ElevenLabs API key", info: "From elevenlabs.io → Profile → API keys. Stored in the Keychain. Replies are sent to ElevenLabs to be spoken.",
                                               account: CloudSpeechOutput.elevenLabsKeyAccount, notch: notch)

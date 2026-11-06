@@ -109,7 +109,10 @@ public struct Profile: Codable, Equatable {
         public var elevenLabsModel: String
         public var openAIVoice: String
         public var openAIInstructions: String
-        private enum CodingKeys: String, CodingKey { case engine, elevenLabsVoiceId, elevenLabsModel, openAIVoice, openAIInstructions }
+        /// Kokoro (free, on-device): bm_george, bm_lewis, bm_daniel, bm_fable are British male.
+        public var kokoroVoice: String = "bm_george"
+        public var kokoroSpeed: Double = 1.0
+        private enum CodingKeys: String, CodingKey { case engine, elevenLabsVoiceId, elevenLabsModel, openAIVoice, openAIInstructions, kokoroVoice, kokoroSpeed }
         public init(engine: String = "auto", elevenLabsVoiceId: String = "onwK4e9ZLuTAKqWW03F9", elevenLabsModel: String = "eleven_flash_v2_5",
                     openAIVoice: String = "fable", openAIInstructions: String = Voice.defaultInstructions) {
             self.engine = engine; self.elevenLabsVoiceId = elevenLabsVoiceId; self.elevenLabsModel = elevenLabsModel
@@ -123,6 +126,8 @@ public struct Profile: Codable, Equatable {
             elevenLabsModel = try c.decodeIfPresent(String.self, forKey: .elevenLabsModel) ?? "eleven_flash_v2_5"
             openAIVoice = try c.decodeIfPresent(String.self, forKey: .openAIVoice) ?? "fable"
             openAIInstructions = try c.decodeIfPresent(String.self, forKey: .openAIInstructions) ?? Voice.defaultInstructions
+            kokoroVoice = try c.decodeIfPresent(String.self, forKey: .kokoroVoice) ?? "bm_george"
+            kokoroSpeed = try c.decodeIfPresent(Double.self, forKey: .kokoroSpeed) ?? 1.0
         }
     }
     public struct HUD: Codable, Equatable {

@@ -39,6 +39,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var floating: FloatingWindowController?
     public private(set) var voice: SpeechRouter!
     public private(set) var spotify: SpotifySearch!
+    public private(set) var kokoro: KokoroService!
     private var debugSignals: DebugSignals?
 
     public override init() { super.init() }
@@ -47,6 +48,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public static func effectiveVoice(_ v: Profile.Voice?) -> Profile.Voice {
         var voice = v ?? Profile.Voice()
         if let override = UserDefaults.standard.string(forKey: "jarvis.voiceEngine") { voice.engine = override }
+        if let k = UserDefaults.standard.string(forKey: "jarvis.kokoroVoice") { voice.kokoroVoice = k }
         return voice
     }
 
@@ -103,7 +105,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         speech = AppleSpeechOutput(preferredVoice: UserDefaults.standard.string(forKey: "jarvis.voice") ?? config.profile.assistant.voiceIdentifier)
         voice = SpeechRouter(apple: speech)
+        kokoro = KokoroService()
+        CloudSpeechOutput.kokoroBaseURL = kokoro.baseURL
+        voice.kokoroReady = { [weak self] in self?.kokoro.isReady ?? false }
         voice.configure(Self.effectiveVoice(config.profile.voice))
+        kokoro.onReady = { [weak self] in
+            guard let self else { return }
+            self.voice.configure(Self.effectiveVoice(self.config.profile.voice))
+        }
+        kokoro.start()
         spotify = SpotifySearch()
         // Safety layer + tools + brain
         undo = UndoStack()
@@ -195,7 +205,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         if config.profile.wake?.alwaysSpotPhrases ?? false { spotter.start() }
         Task { _ = await spotTranscriber.requestAuthorization() }
         menuBar = MenuBarController(config: config, notch: notch, notchWindow: notchWindow, modes: modes,
-                                    demo: demo, wake: wake, conversation: conversation, speech: speech, voice: voice, spotify: spotify, brain: brain, log: actionLog,
+                                    demo: demo, wake: wake, conversation: conversation, speech: speech, voice: voice, kokoro: kokoro, spotify: spotify, brain: brain, log: actionLog,
                                     googleAuth: googleAuth, notion: notion, briefing: briefing,
                                     proactive: proactive, context: context, hud: hud, scenes: scenes,
                                     memory: memory, skills: skills, local: local, narrator: narrator)
@@ -248,6 +258,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         wake?.stop()
+        kokoro?.stop()
         JarvisLog.info("Jarvis quitting")
     }
 
