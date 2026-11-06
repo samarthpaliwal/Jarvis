@@ -40,7 +40,7 @@ public final class Brain: ObservableObject {
         didSet { UserDefaults.standard.set(privateMode, forKey: "jarvis.privateMode") }
     }
     /// Tools a small local model gets (a short list keeps it accurate).
-    static let localToolNames: Set<String> = ["system_status", "open_app", "set_volume", "media_control", "set_timer", "set_reminder",
+    static let localToolNames: Set<String> = ["system_status", "open_app", "set_volume", "music", "set_timer", "set_reminder",
                                               "calendar_read", "calendar_create", "get_briefing", "set_mode", "undo_last_action",
                                               "memory", "memory_search", "file_search", "set_brightness", "set_display_mode", "welcome_home"]
 

@@ -35,10 +35,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var world: WorldService!
     public private(set) var narrator: BriefingNarrator!
     public private(set) var local: OllamaClient!
-    private var edgeGlow: EdgeGlowWindowController!
+    private var edgeGlow: EdgeGlowWindowController?
+    public private(set) var floating: FloatingWindowController?
+    public private(set) var voice: SpeechRouter!
+    public private(set) var spotify: SpotifySearch!
     private var debugSignals: DebugSignals?
 
     public override init() { super.init() }
+
+    /// Config voice settings with the menu's engine override (UserDefaults "jarvis.voiceEngine") applied.
+    public static func effectiveVoice(_ v: Profile.Voice?) -> Profile.Voice {
+        var voice = v ?? Profile.Voice()
+        if let override = UserDefaults.standard.string(forKey: "jarvis.voiceEngine") { voice.engine = override }
+        return voice
+    }
 
     /// Minimal main menu: LSUIElement apps have none by default, which silently breaks ⌘V in text fields.
     public static func makeMainMenu() -> NSMenu {
@@ -72,10 +82,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         notchWindow = NotchWindowController(model: notch)
         modes = ModeManager(config: config, notch: notch)
         demo = DemoDriver(notch: notch, config: config)
-        edgeGlow = EdgeGlowWindowController(model: notch)
+        let ui = config.profile.ui ?? Profile.UI()
+        NotchViewModel.haloEnabled = ui.halo
+        if ui.halo { edgeGlow = EdgeGlowWindowController(model: notch) }
+        if ui.style != "notch" {
+            notchWindow.enabled = false
+            let f = FloatingWindowController(model: notch)
+            f.pinnedDisplay = ui.screen
+            f.position = FloatingWindowController.Position(rawValue: ui.position) ?? .bottom
+            floating = f
+        }
+        JarvisLog.info("UI: \(ui.style) on \(ui.screen) screen, position \(ui.position), halo \(ui.halo)")
         wake = WakeWordService()
         transcriber = TranscriberFactory.make(locale: Locale(identifier: config.profile.speech?.locale ?? "en-US"))
+        JarvisLog.info("Voice candidates: " + VoicePicker.candidates().prefix(4).map { "\($0.name)[\($0.identifier) r\(VoicePicker.rank($0))]" }.joined(separator: ", "))
+        // A saved plain default voice ("Daniel") is upgraded once to the best installed voice (Siri neural first).
+        if VoicePicker.shouldUpgrade(saved: UserDefaults.standard.string(forKey: "jarvis.voice")) {
+            JarvisLog.info("Voice: upgrading saved default-quality voice to the best installed voice")
+            UserDefaults.standard.removeObject(forKey: "jarvis.voice")
+        }
         speech = AppleSpeechOutput(preferredVoice: UserDefaults.standard.string(forKey: "jarvis.voice") ?? config.profile.assistant.voiceIdentifier)
+        voice = SpeechRouter(apple: speech)
+        voice.configure(Self.effectiveVoice(config.profile.voice))
+        spotify = SpotifySearch()
         // Safety layer + tools + brain
         undo = UndoStack()
         timers = TimerService()
@@ -94,7 +123,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         local = OllamaClient(baseURL: URL(string: config.profile.local?.baseURL ?? "http://127.0.0.1:11434")!,
                              model: config.profile.local?.model ?? "qwen3.5:9b")
         dispatcher.register([
-            SystemStatusTool(), OpenAppTool(), SetVolumeTool(), MediaControlTool(), SetTimerTool(service: timers),
+            SystemStatusTool(), OpenAppTool(), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
             UndoLastActionTool(), ActionsTodayTool(log: actionLog),
             GetBriefingTool(service: briefing), CalendarReadTool(calendar: calendar), CalendarCreateTool(calendar: calendar),
@@ -113,7 +142,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         hud = HUDWindowController(model: notch, dismissAfter: config.profile.hud?.dismissAfterSeconds ?? 8,
                                   preferredDisplay: config.profile.hud?.preferredDisplay)
         conversation = ConversationController(notch: notch, wake: wake, transcriber: transcriber,
-                                              speech: speech, config: config, modes: modes, brain: brain)
+                                              speech: voice, config: config, modes: modes, brain: brain)
+        voice.isOnline = { [weak self] in self?.brain.isOnline ?? true }
+        floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
         dispatcher.register([SetDisplayModeTool(hud: hud), WelcomeHomeTool(run: { [weak self] in self?.scenes.homecoming(trigger: "voice") })])
         dispatcher.approvalHandler = { [weak self] request in await self?.conversation.requestApproval(request) ?? false }
         dispatcher.onSummary = { summary in JarvisLog.info("Action: \(summary)") }
@@ -164,7 +195,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         if config.profile.wake?.alwaysSpotPhrases ?? false { spotter.start() }
         Task { _ = await spotTranscriber.requestAuthorization() }
         menuBar = MenuBarController(config: config, notch: notch, notchWindow: notchWindow, modes: modes,
-                                    demo: demo, wake: wake, conversation: conversation, speech: speech, brain: brain, log: actionLog,
+                                    demo: demo, wake: wake, conversation: conversation, speech: speech, voice: voice, spotify: spotify, brain: brain, log: actionLog,
                                     googleAuth: googleAuth, notion: notion, briefing: briefing,
                                     proactive: proactive, context: context, hud: hud, scenes: scenes,
                                     memory: memory, skills: skills, local: local, narrator: narrator)
@@ -200,7 +231,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             self.conversation.deliver(r.isError ? r.content : "Ran it. Output: \(r.content.suffix(60))")
                                         }
                                     }, demo: demo)
-        JarvisLog.info("Speech in: \(transcriber.name) · Speech out: \(speech.name)")
+        JarvisLog.info("Speech in: \(transcriber.name) · Speech out: \(voice.engineName) · Apple fallback: \(speech.name)")
 
         // JARVIS_NO_WAKE=1 skips the microphone entirely (used for CPU baselines).
         if ProcessInfo.processInfo.environment["JARVIS_NO_WAKE"] != "1" {

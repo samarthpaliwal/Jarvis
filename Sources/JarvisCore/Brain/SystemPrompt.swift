@@ -42,6 +42,7 @@ public enum SystemPrompt {
         - Your replies are spoken aloud. Keep them to \(a.spokenReplyMaxSentences) sentences unless asked for detail. \
         No markdown, no bullet lists, no emoji, no URLs read aloud. Numbers and times in natural speech.
         - Use tools whenever they help; don't guess at things a tool can check. Call several tools at once when independent.
+        - For music, use the music tool (Spotify by default): play_query to play something by name, next/previous/pause otherwise.
         - Some tools need \(a.addressUserAs)'s approval. The system handles that: just call the tool, and if the result says it was \
         rejected or refused, say so in one short sentence and move on. Never argue, never retry a refused action.
         - After a tool changes something, say what you did in one line. If an undo is available, say "say undo to put it back" once.

@@ -369,6 +369,29 @@ shows the last three exchanges.
 Test hooks: write `!homecoming`, `!arrive`, or `!hud` to `~/Library/Application Support/Jarvis/ask.txt` and
 `kill -INFO $(pgrep -x Jarvis)`.
 
+## Look, music, and voice (0.9)
+
+**Floating card instead of the notch.** Jarvis now appears as a dark card at the bottom of whichever
+screen your mouse is on, only while it is listening, thinking, or answering. Nothing sits near the menu
+bar, and there is no glow or halo. Click × to dismiss and stop it talking. `profile.json → ui`:
+`style` (`floating` or `notch`), `screen` (`active` or a display name like `"Odyssey G5"` to pin it),
+`position` (`bottom`, `center`, `top`), `halo` (`false`). The full-screen HUD is off for normal
+conversations (menu toggle) and still used for the homecoming scene.
+
+**Music.** The `music` tool drives Spotify (or Apple Music) through AppleScript: play, pause, next,
+previous, what's playing, volume, shuffle, and **play by name**. macOS asks once to let Jarvis control
+Spotify. Playing a specific song needs a free Spotify developer app for search (no login): Jarvis menu →
+Integrations → *Set Spotify Client…* (steps in the dialog). Without it, Jarvis opens Spotify's search
+for the song so one click plays it.
+
+**Voice.** macOS hides its smoother Siri and Premium voices from third-party apps, so Jarvis on its own
+only gets the basic voices. For a natural JARVIS voice, add a cloud voice from the menu → Voice:
+- *Set ElevenLabs Key…* (most natural; default voice "Daniel", a deep British male; free tier available).
+- *Set OpenAI Key…* (gpt-4o-mini-tts, voice "fable", steered to sound like a calm British butler).
+
+Replies are spoken sentence by sentence while the rest streams; if the cloud voice fails or you're
+offline, that reply finishes on the Apple voice. Cloud voices send the reply text to that provider.
+
 ## Ported from OpenJarvis
 
 [OpenJarvis](https://github.com/open-jarvis/openjarvis) (Stanford, Apache-2.0) is a Python/Rust/Tauri
@@ -457,6 +480,12 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.9.0 — Card, music, voice (2026-11-06)
+- Floating card on the active screen replaces the menu-bar notch overlay; halo off; HUD no longer on every turn.
+- `music` tool: Spotify / Apple Music via AppleScript, play by name via Spotify search (client credentials). Replaces media keys, which macOS ignored.
+- Neural voices: ElevenLabs and OpenAI TTS with per-sentence streaming and Apple fallback; voice picker ranks Siri neural / Premium voices first when visible.
+- Verified live: "What's Spotify playing?" and "Play the music" worked; card shown on the screen under the mouse. 95 tests.
 
 ### 0.8.1 — Mic fix (2026-11-06)
 - Fixed: after the input switched between AirPods and the built-in mic, the audio tap could go silent, so "Hey Jarvis" was never heard while typed commands still worked. Capture now builds a fresh `AVAudioEngine` on every restart, and a watchdog rebuilds it if no audio arrives for 6 seconds.

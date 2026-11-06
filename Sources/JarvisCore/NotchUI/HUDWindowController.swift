@@ -60,7 +60,7 @@ public final class HUDWindowController: ObservableObject {
     /// Show the HUD. `scene` keeps it up until the scene ends (plus the dismiss delay).
     public func show(scene: Bool) {
         pinnedForScene = scene || pinnedForScene
-        guard let screen = NotchGeometry.screen(named: preferredDisplay) ?? NotchGeometry.preferredScreen() else { return }
+        guard let screen = ScreenResolver.target(pinned: preferredDisplay) else { return }
         if hosting == nil { rebuild() }
         panel.setFrame(screen.frame, display: true)
         panel.alphaValue = 0

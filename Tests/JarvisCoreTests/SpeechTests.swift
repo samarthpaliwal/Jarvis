@@ -47,7 +47,7 @@ final class VoicePickerTests: XCTestCase {
         XCTAssertFalse(c.isEmpty)
         XCTAssertTrue(c.allSatisfy { $0.language.hasPrefix("en") })
         for (a, b) in zip(c, c.dropFirst()) {
-            XCTAssertGreaterThanOrEqual(a.quality.rawValue, b.quality.rawValue)
+            XCTAssertGreaterThanOrEqual(VoicePicker.rank(a), VoicePicker.rank(b))
         }
     }
 

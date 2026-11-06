@@ -83,6 +83,48 @@ public struct Profile: Codable, Equatable {
             archiveConversations = try c.decodeIfPresent(Bool.self, forKey: .archiveConversations) ?? true
         }
     }
+    /// How Jarvis shows itself. style "floating" = a card on the active screen; "notch" = the original notch island.
+    public struct UI: Codable, Equatable {
+        public var style: String
+        /// "active" = the screen under the mouse, or a display name like "Odyssey G5" to pin it.
+        public var screen: String
+        public var position: String
+        public var halo: Bool
+        private enum CodingKeys: String, CodingKey { case style, screen, position, halo }
+        public init(style: String = "floating", screen: String = "active", position: String = "bottom", halo: Bool = false) {
+            self.style = style; self.screen = screen; self.position = position; self.halo = halo
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            style = try c.decodeIfPresent(String.self, forKey: .style) ?? "floating"
+            screen = try c.decodeIfPresent(String.self, forKey: .screen) ?? "active"
+            position = try c.decodeIfPresent(String.self, forKey: .position) ?? "bottom"
+            halo = try c.decodeIfPresent(Bool.self, forKey: .halo) ?? false
+        }
+    }
+    /// Text-to-speech engine. "auto" = ElevenLabs if a key is set, else OpenAI if a key is set, else the best Apple voice.
+    public struct Voice: Codable, Equatable {
+        public var engine: String
+        public var elevenLabsVoiceId: String
+        public var elevenLabsModel: String
+        public var openAIVoice: String
+        public var openAIInstructions: String
+        private enum CodingKeys: String, CodingKey { case engine, elevenLabsVoiceId, elevenLabsModel, openAIVoice, openAIInstructions }
+        public init(engine: String = "auto", elevenLabsVoiceId: String = "onwK4e9ZLuTAKqWW03F9", elevenLabsModel: String = "eleven_flash_v2_5",
+                    openAIVoice: String = "fable", openAIInstructions: String = Voice.defaultInstructions) {
+            self.engine = engine; self.elevenLabsVoiceId = elevenLabsVoiceId; self.elevenLabsModel = elevenLabsModel
+            self.openAIVoice = openAIVoice; self.openAIInstructions = openAIInstructions
+        }
+        public static let defaultInstructions = "Speak as JARVIS: a refined British AI butler. Smooth, warm, calm and measured, with a hint of dry wit. Natural pacing, never robotic."
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            engine = try c.decodeIfPresent(String.self, forKey: .engine) ?? "auto"
+            elevenLabsVoiceId = try c.decodeIfPresent(String.self, forKey: .elevenLabsVoiceId) ?? "onwK4e9ZLuTAKqWW03F9"
+            elevenLabsModel = try c.decodeIfPresent(String.self, forKey: .elevenLabsModel) ?? "eleven_flash_v2_5"
+            openAIVoice = try c.decodeIfPresent(String.self, forKey: .openAIVoice) ?? "fable"
+            openAIInstructions = try c.decodeIfPresent(String.self, forKey: .openAIInstructions) ?? Voice.defaultInstructions
+        }
+    }
     public struct HUD: Codable, Equatable {
         public var fullScreenAlways: Bool
         public var fullScreenForScenes: Bool
@@ -230,6 +272,8 @@ public struct Profile: Codable, Equatable {
     public var world: World?
     public var local: Local?
     public var memory: MemoryConfig?
+    public var ui: UI?
+    public var voice: Voice?
 
     /// Used when profile.json is missing or malformed so the app still launches.
     public static let fallback = Profile(
@@ -246,8 +290,8 @@ public struct Profile: Codable, Equatable {
         proactive: Proactive(breakReminders: false, breakAfterMinutes: 90, quietHoursStart: "22:30", quietHoursEnd: "06:00"),
         speech: Speech(locale: "en-US", silenceEndSeconds: 1.3, noSpeechTimeoutSeconds: 6, maxUtteranceSeconds: 20),
         wake: Wake(phrases: [WakePhrase(phrase: "wake up daddy's home", aliases: ["daddy's home", "daddy is home"], scene: "homecoming")]),
-        hud: HUD(preferredDisplay: "Odyssey G5"),
-        world: World(), local: Local(), memory: MemoryConfig()
+        hud: HUD(preferredDisplay: nil),
+        world: World(), local: Local(), memory: MemoryConfig(), ui: UI(), voice: Voice()
     )
 }
 

@@ -13,6 +13,10 @@ public final class NotchWindowController {
     /// Generous fixed panel size; the SwiftUI content draws only what it needs at the top.
     private static let panelSize = CGSize(width: 820, height: 460)
     private var observers: [Any] = []
+    /// False = never shown (floating-card style).
+    public var enabled = true {
+        didSet { if enabled { show() } else { panel.orderOut(nil) } }
+    }
 
     public init(model: NotchViewModel) {
         self.model = model
@@ -23,7 +27,6 @@ public final class NotchWindowController {
         panel.contentView = hosting
 
         reposition()
-        panel.orderFrontRegardless()
 
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -37,7 +40,7 @@ public final class NotchWindowController {
         })
         observers.append(wnc.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification,
                                          object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.panel.orderFrontRegardless() }
+            Task { @MainActor in if self?.enabled == true { self?.panel.orderFrontRegardless() } }
         })
     }
 
@@ -49,7 +52,7 @@ public final class NotchWindowController {
         let origin = CGPoint(x: (screen.frame.midX - size.width / 2).rounded(),
                              y: screen.frame.maxY - size.height)
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
-        panel.orderFrontRegardless()
+        if enabled { panel.orderFrontRegardless() }
         if let reason {
             JarvisLog.info("Notch repositioned (\(reason)): notch=\(geometry.hasNotch) w=\(Int(geometry.notchWidth)) h=\(Int(geometry.notchHeight))")
         }
@@ -57,5 +60,5 @@ public final class NotchWindowController {
 
     public var isVisible: Bool { panel.isVisible }
     public func hide() { panel.orderOut(nil) }
-    public func show() { panel.orderFrontRegardless() }
+    public func show() { if enabled { panel.orderFrontRegardless() } }
 }

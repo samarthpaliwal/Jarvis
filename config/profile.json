@@ -106,7 +106,7 @@
     "fullScreenAlways": false,
     "fullScreenForScenes": true,
     "dismissAfterSeconds": 8,
-    "preferredDisplay": "Odyssey G5"
+    "preferredDisplay": null
   },
   "world": {
     "weatherCity": "Tucson",
@@ -124,5 +124,20 @@
     "_comment": "MEMORY.md, USER.md and memory.db live in ~/Library/Application Support/Jarvis. Nothing leaves the Mac except what is sent to Claude in a turn.",
     "enabled": true,
     "archiveConversations": true
+  },
+  "ui": {
+    "_comment": "style: floating (card on the active screen) or notch. screen: active (the screen under your mouse) or a display name to pin, e.g. \"Odyssey G5\". position: bottom, center, top. halo: the Siri-style glow.",
+    "style": "floating",
+    "screen": "active",
+    "position": "bottom",
+    "halo": false
+  },
+  "voice": {
+    "_comment": "engine: auto, apple, elevenlabs, openai. Cloud voices send the reply text to that provider. Keys go in the Keychain via the Jarvis menu → Voice.",
+    "engine": "auto",
+    "elevenLabsVoiceId": "onwK4e9ZLuTAKqWW03F9",
+    "elevenLabsModel": "eleven_flash_v2_5",
+    "openAIVoice": "fable",
+    "openAIInstructions": "Speak as JARVIS: a refined British AI butler. Smooth, warm, calm and measured, with a hint of dry wit. Natural pacing, never robotic."
   }
 }

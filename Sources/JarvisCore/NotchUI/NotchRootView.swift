@@ -205,7 +205,7 @@ private struct GlowingShape: View {
 
     var body: some View {
         ZStack {
-            if phase == .listening || phase == .thinking {
+            if (phase == .listening || phase == .thinking) && NotchViewModel.haloEnabled {
                 SiriGlowStroke(shape: NotchShape(topRadius: topRadius, bottomRadius: bottomRadius),
                                lineWidth: phase == .listening ? 10 : 6,
                                blur: phase == .listening ? 14 : 10,

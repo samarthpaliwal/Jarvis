@@ -13,6 +13,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     private let wake: WakeWordService
     private let conversation: ConversationController
     private let speech: AppleSpeechOutput
+    private let voice: SpeechRouter
+    private let spotify: SpotifySearch
     private let brain: Brain
     private let actionLog: ActionLog
     private let googleAuth: GoogleAuth
@@ -31,7 +33,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
 
     public init(config: ConfigStore, notch: NotchViewModel, notchWindow: NotchWindowController,
                 modes: ModeManager, demo: DemoDriver, wake: WakeWordService,
-                conversation: ConversationController, speech: AppleSpeechOutput, brain: Brain, log: ActionLog,
+                conversation: ConversationController, speech: AppleSpeechOutput, voice: SpeechRouter, spotify: SpotifySearch, brain: Brain, log: ActionLog,
                 googleAuth: GoogleAuth, notion: NotionClient, briefing: BriefingService,
                 proactive: ProactiveScheduler, context: ContextDetector, hud: HUDWindowController, scenes: SceneDirector,
                 memory: MemoryStore, skills: SkillLibrary, local: OllamaClient, narrator: BriefingNarrator) {
@@ -45,6 +47,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         self.scenes = scenes
         self.conversation = conversation
         self.speech = speech
+        self.voice = voice
+        self.spotify = spotify
         self.brain = brain
         self.actionLog = log
         self.googleAuth = googleAuth
@@ -198,6 +202,11 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             })
         }
         integ.addItem(.separator())
+        let sp = NSMenuItem(title: "Spotify search: \(spotify.isConfigured ? "ready (one-step play by name)" : "not set up (opens search instead)")", action: nil, keyEquivalent: ""); sp.isEnabled = false; integ.addItem(sp)
+        integ.addItem(ClosureMenuItem(title: "Set Spotify Client…", symbol: "music.note") { [notch] in
+            MenuBarController.promptForSpotifyClient(notch: notch)
+        })
+        integ.addItem(.separator())
         let n = NSMenuItem(title: "Notion: \(notion.isConfigured ? "connected" : "not connected")", action: nil, keyEquivalent: ""); n.isEnabled = false; integ.addItem(n)
         integ.addItem(ClosureMenuItem(title: "Connect Notion…", symbol: "doc.text") { [notch] in
             MenuBarController.promptForSecret(title: "Notion integration token",
@@ -229,8 +238,38 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             conversation.stopEverything()
         })
         voiceMenu.addItem(.separator())
+        let eng = NSMenuItem(title: "Engine: \(voice.engineName)", action: nil, keyEquivalent: "")
+        eng.isEnabled = false
+        voiceMenu.addItem(eng)
+        let current = UserDefaults.standard.string(forKey: "jarvis.voiceEngine") ?? config.profile.voice?.engine ?? "auto"
+        for (id, label) in [("auto", "Best available (cloud if a key is set)"), ("elevenlabs", "ElevenLabs (most natural)"), ("openai", "OpenAI voice"), ("apple", "Apple on-device only")] {
+            let item = ClosureMenuItem(title: label) { [voice, config, notch] in
+                UserDefaults.standard.set(id, forKey: "jarvis.voiceEngine")
+                voice.configure(AppDelegate.effectiveVoice(config.profile.voice))
+                notch.flash("Voice: \(voice.engineName)")
+            }
+            item.state = current == id ? .on : .off
+            voiceMenu.addItem(item)
+        }
+        voiceMenu.addItem(ClosureMenuItem(title: "Set ElevenLabs Key…", symbol: "key") { [voice, config, notch] in
+            MenuBarController.promptForSecret(title: "ElevenLabs API key", info: "From elevenlabs.io → Profile → API keys. Stored in the Keychain. Replies are sent to ElevenLabs to be spoken.",
+                                              account: CloudSpeechOutput.elevenLabsKeyAccount, notch: notch)
+            voice.configure(AppDelegate.effectiveVoice(config.profile.voice))
+        })
+        voiceMenu.addItem(ClosureMenuItem(title: "Set OpenAI Key…", symbol: "key") { [voice, config, notch] in
+            MenuBarController.promptForSecret(title: "OpenAI API key", info: "From platform.openai.com → API keys. Stored in the Keychain. Replies are sent to OpenAI to be spoken.",
+                                              account: CloudSpeechOutput.openAIKeyAccount, notch: notch)
+            voice.configure(AppDelegate.effectiveVoice(config.profile.voice))
+        })
+        voiceMenu.addItem(ClosureMenuItem(title: "Get Better Apple Voices…", symbol: "arrow.down.circle") {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent") { NSWorkspace.shared.open(url) }
+        })
+        voiceMenu.addItem(.separator())
+        let appleHeader = NSMenuItem(title: "Apple voices (used when no cloud voice):", action: nil, keyEquivalent: "")
+        appleHeader.isEnabled = false
+        voiceMenu.addItem(appleHeader)
         for v in VoicePicker.candidates().prefix(14) {
-            let item = ClosureMenuItem(title: "\(v.name) · \(v.language) · \(VoicePicker.label(v.quality))") { [speech] in
+            let item = ClosureMenuItem(title: "\(v.name) · \(v.language) · \(VoicePicker.label(v))") { [speech] in
                 speech.voice = AVSpeechSynthesisVoice(identifier: v.identifier)
                 UserDefaults.standard.set(v.identifier, forKey: "jarvis.voice")
                 JarvisLog.info("Voice set to \(v.name) (\(v.identifier))")
@@ -242,7 +281,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         let hint = NSMenuItem(title: "More voices: System Settings → Accessibility → Spoken Content", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         voiceMenu.addItem(hint)
-        let voiceItem = NSMenuItem(title: "Voice: \(speech.voice?.name ?? "default")", action: nil, keyEquivalent: "")
+        let voiceItem = NSMenuItem(title: "Voice: \(voice.engineName.hasPrefix("AVSpeech") ? (speech.voice?.name ?? "default") : voice.engineName)", action: nil, keyEquivalent: "")
         voiceItem.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
         voiceItem.submenu = voiceMenu
         menu.addItem(voiceItem)
@@ -436,6 +475,30 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         guard !v.isEmpty else { notch.flash("Clipboard is empty"); return }
         do { try KeychainStore.write(v, account: account); notch.flash("\(title) saved to Keychain") }
         catch { notch.flash("Couldn’t save: \(error.localizedDescription)", seconds: 6) }
+    }
+
+    static func promptForSpotifyClient(notch: NotchViewModel) {
+        let alert = NSAlert()
+        alert.messageText = "Spotify client (for playing songs by name)"
+        alert.informativeText = "developer.spotify.com/dashboard → Create app (any name; redirect URI http://127.0.0.1:8888/callback; tick Web API) → Settings. Paste the Client ID and Client secret. Stored in the Keychain. No Spotify login is needed."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let stack = NSStackView(frame: NSRect(x: 0, y: 0, width: 380, height: 56))
+        stack.orientation = .vertical
+        let id = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24)); id.placeholderString = "Client ID (⌘V works)"
+        let secret = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24)); secret.placeholderString = "Client secret"
+        stack.addArrangedSubview(id); stack.addArrangedSubview(secret)
+        alert.accessoryView = stack
+        alert.window.initialFirstResponder = id
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let cid = id.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), cs = secret.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cid.isEmpty, !cs.isEmpty else { notch.flash("Both fields are needed"); return }
+        do {
+            try KeychainStore.write(cid, account: SpotifySearch.clientIDAccount)
+            try KeychainStore.write(cs, account: SpotifySearch.clientSecretAccount)
+            notch.flash("Spotify search ready. Try “Hey Jarvis, play Thunderstruck”.", seconds: 5)
+        } catch { notch.flash("Couldn’t save: \(error.localizedDescription)", seconds: 6) }
     }
 
     static func promptForGoogleClient(notch: NotchViewModel) {

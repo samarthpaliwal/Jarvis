@@ -25,8 +25,18 @@ public enum VoicePicker {
     }
 
     /// Natural-sounding default voices, in order of preference, when nothing better is installed.
-    /// JARVIS is British: en-GB voices first (Daniel, Oliver, Kate, Serena), then the natural US ones.
-    static let preferredNames = ["Daniel", "Oliver", "Kate", "Serena", "Samantha", "Alex", "Karen", "Moira", "Rishi", "Tessa", "Fiona", "Aaron", "Nicky", "Evan", "Ava", "Zoe", "Tom"]
+    /// JARVIS is British: en-GB voices first (Jamie, Oliver, Daniel, Serena, Kate), then the natural US ones.
+    static let preferredNames = ["Jamie", "Oliver", "Daniel", "Serena", "Kate", "Stephanie", "Ava", "Zoe", "Evan", "Nathan", "Samantha", "Alex", "Karen", "Moira", "Tessa", "Fiona"]
+
+    /// Apple's Siri neural voices (identifier com.apple.siri.natural.*) are by far the smoothest on-device voices.
+    static func isSiriNatural(_ identifier: String) -> Bool { identifier.contains(".siri.") }
+
+    /// Higher is better: Siri neural 4, Premium 3, Enhanced 2, Default 1 (novelty voices last).
+    static func rank(_ c: Candidate) -> Int {
+        if isNovelty(c.identifier) { return 0 }
+        if isSiriNatural(c.identifier) { return 4 }
+        return c.quality.rawValue
+    }
 
     /// Novelty / legacy voices live under this prefix (Albert, Bubbles, Cellos, …).
     static func isNovelty(_ identifier: String) -> Bool {
@@ -38,9 +48,9 @@ public enum VoicePicker {
             .filter { $0.language.hasPrefix(languagePrefix) }
             .map { Candidate(identifier: $0.identifier, name: $0.name, language: $0.language, quality: $0.quality) }
             .sorted { a, b in
-                if a.quality != b.quality { return a.quality.rawValue > b.quality.rawValue }
-                let aNov = isNovelty(a.identifier), bNov = isNovelty(b.identifier)
-                if aNov != bNov { return !aNov }
+                if rank(a) != rank(b) { return rank(a) > rank(b) }
+                let aGB = a.language == "en-GB", bGB = b.language == "en-GB"
+                if aGB != bGB { return aGB }
                 let ai = preferredNames.firstIndex(of: a.name) ?? Int.max
                 let bi = preferredNames.firstIndex(of: b.name) ?? Int.max
                 if ai != bi { return ai < bi }
@@ -55,6 +65,18 @@ public enum VoicePicker {
         if let identifier, let v = AVSpeechSynthesisVoice(identifier: identifier) { return v }
         if let top = candidates().first { return AVSpeechSynthesisVoice(identifier: top.identifier) }
         return AVSpeechSynthesisVoice(language: "en-US")
+    }
+
+    public static func label(_ c: Candidate) -> String {
+        isSiriNatural(c.identifier) ? "Siri neural" : label(c.quality)
+    }
+
+    /// True when the saved choice is a plain default voice and something clearly better is installed.
+    public static func shouldUpgrade(saved identifier: String?) -> Bool {
+        guard let identifier, let v = AVSpeechSynthesisVoice(identifier: identifier) else { return false }
+        let saved = Candidate(identifier: v.identifier, name: v.name, language: v.language, quality: v.quality)
+        guard let best = candidates().first else { return false }
+        return rank(best) > rank(saved) && rank(saved) <= 1
     }
 
     public static func label(_ q: AVSpeechSynthesisVoiceQuality) -> String {

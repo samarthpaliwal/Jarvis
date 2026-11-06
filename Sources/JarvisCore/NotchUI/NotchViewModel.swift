@@ -59,6 +59,9 @@ public final class NotchViewModel: ObservableObject {
     /// 0...1 opacity of the full-screen Siri-style edge glow.
     @Published public var edgeGlow: Double = 0
 
+    /// The Siri-style glow around the notch and screen edges. Off by default (config `ui.halo`).
+    public static var haloEnabled = false
+
     /// Recent exchanges for the HUD (you / Jarvis), newest last.
     public struct Exchange: Equatable, Identifiable { public let id = UUID(); public var you: String; public var jarvis: String }
     @Published public var log: [Exchange] = []
@@ -97,7 +100,7 @@ public final class NotchViewModel: ObservableObject {
         cancelCollapse()
         transcript = ""
         phase = .listening
-        edgeGlow = isFollowUp ? glowStrength * 0.35 : glowStrength
+        edgeGlow = Self.haloEnabled ? (isFollowUp ? glowStrength * 0.35 : glowStrength) : 0
     }
 
     public func think() {
