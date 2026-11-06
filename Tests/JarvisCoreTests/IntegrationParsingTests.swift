@@ -104,3 +104,21 @@ final class BriefingLogicTests: XCTestCase {
         XCTAssertEqual(BriefingService.days(from: a, to: b), 6)
     }
 }
+
+final class LoopbackListenerTests: XCTestCase {
+    func testBindsARealLoopbackPortAndReceivesTheCallback() async throws {
+        let listener = try LoopbackListener()
+        XCTAssertGreaterThan(listener.port, 1024, "redirect URI must carry a real port, never 0")
+        async let params = listener.waitForCallback(timeout: 5)
+        try await Task.sleep(for: .milliseconds(100))
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.connectionProxyDictionary = [:]
+        let url = URL(string: "http://127.0.0.1:\(listener.port)/callback?state=s1&code=4%2Fabc")!
+        let (data, resp) = try await URLSession(configuration: cfg).data(from: url)
+        XCTAssertEqual((resp as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("connected to Gmail"))
+        let got = try await params
+        XCTAssertEqual(got["code"], "4/abc")
+        XCTAssertEqual(got["state"], "s1")
+    }
+}

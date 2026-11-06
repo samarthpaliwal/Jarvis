@@ -112,20 +112,56 @@ extension Data {
     }
 }
 
-/// One-shot HTTP listener on 127.0.0.1 for the OAuth redirect.
+/// One-shot HTTP listener for the OAuth redirect, bound to 127.0.0.1 only (never the network).
 final class LoopbackListener: @unchecked Sendable {
     let listener: NWListener
-    var port: UInt16 { listener.port?.rawValue ?? 0 }
+    let port: UInt16
     private var continuation: CheckedContinuation<[String: String], Error>?
     private let lock = NSLock()
 
+    enum ListenerError: LocalizedError {
+        case noPort
+        var errorDescription: String? { "Couldn't open a local port for Google sign-in." }
+    }
+
+    /// Forwards connections to `self` once init has finished (handlers must be set before start()).
+    private final class Router: @unchecked Sendable { weak var target: LoopbackListener? }
+
     init() throws {
-        listener = try NWListener(using: .tcp, on: .any)
-        listener.newConnectionHandler = { [weak self] conn in self?.handle(conn) }
-        listener.start(queue: .global())
-        // Wait briefly for the port assignment.
-        var tries = 0
-        while listener.port == nil && tries < 50 { usleep(10_000); tries += 1 }
+        let router = Router()
+        // Pick a concrete high port and wait until the listener is actually ready, so the
+        // redirect URI never carries a placeholder port (the old bug: http://127.0.0.1:0/callback).
+        var lastError: Error = ListenerError.noPort
+        for _ in 0..<12 {
+            let candidate = UInt16.random(in: 49_152...65_000)
+            guard let nwPort = NWEndpoint.Port(rawValue: candidate) else { continue }
+            let params = NWParameters.tcp
+            params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: nwPort)
+            params.allowLocalEndpointReuse = true
+            do {
+                let l = try NWListener(using: params)
+                let ready = DispatchSemaphore(value: 0)
+                var ok = false
+                l.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready: ok = true; ready.signal()
+                    case .failed, .cancelled: ready.signal()
+                    default: break
+                    }
+                }
+                l.newConnectionHandler = { conn in router.target?.handle(conn) ?? conn.cancel() }
+                l.start(queue: .global())
+                _ = ready.wait(timeout: .now() + 2)
+                if ok {
+                    listener = l
+                    port = candidate
+                    router.target = self
+                    return
+                }
+                l.cancel()
+            } catch { lastError = error }
+        }
+        throw lastError
     }
 
     func waitForCallback(timeout: TimeInterval) async throws -> [String: String] {
