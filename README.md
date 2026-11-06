@@ -396,7 +396,7 @@ scripts/setup-kokoro.sh
 
 Jarvis then starts the voice server itself (127.0.0.1:8880 only) and stops it on quit. It works offline,
 nothing leaves the Mac, and there are no limits. Measured on the M4 Pro: about 0.6 s for a short sentence,
-1.9 s for ten seconds of speech; the server uses about 300 MB of memory. Pick the voice under Jarvis menu →
+1.9 s for ten seconds of speech; the voice server uses about 840 MB of memory and no CPU while idle. Pick the voice under Jarvis menu →
 Voice → Kokoro Voice: George (default), Lewis, Daniel, Fable (all British male), or American ones.
 
 Paid alternatives, also in the menu → Voice:
