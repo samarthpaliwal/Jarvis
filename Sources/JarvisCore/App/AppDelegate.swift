@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 /// Boots every subsystem. Later milestones add wake word, speech, brain, and tools here.
 @MainActor
@@ -40,6 +41,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var voice: SpeechRouter!
     public private(set) var spotify: SpotifySearch!
     public private(set) var kokoro: KokoroService!
+    private var cancellables: Set<AnyCancellable> = []
     private var debugSignals: DebugSignals?
 
     public override init() { super.init() }
@@ -155,6 +157,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                               speech: voice, config: config, modes: modes, brain: brain)
         voice.isOnline = { [weak self] in self?.brain.isOnline ?? true }
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
+        // One chat at a time: when the card goes away, the conversation ends and starts fresh next time.
+        notch.$phase.removeDuplicates().dropFirst().sink { [weak self] phase in
+            guard let self, phase == .idle else { return }
+            if !self.notch.log.isEmpty { JarvisLog.conversationEnded() }
+            self.notch.log.removeAll()
+            self.brain.endSession()
+        }.store(in: &cancellables)
         dispatcher.register([SetDisplayModeTool(hud: hud), WelcomeHomeTool(run: { [weak self] in self?.scenes.homecoming(trigger: "voice") })])
         dispatcher.approvalHandler = { [weak self] request in await self?.conversation.requestApproval(request) ?? false }
         dispatcher.onSummary = { summary in JarvisLog.info("Action: \(summary)") }

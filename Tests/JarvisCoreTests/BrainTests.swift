@@ -151,3 +151,75 @@ final class SentenceChunkerTests: XCTestCase {
         XCTAssertEqual(c.flush(), "Go")
     }
 }
+
+final class HistoryRepairTests: XCTestCase {
+    /// Checks the two API rules that the 400 was about.
+    func assertValid(_ msgs: [JSONObject], file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(msgs.first?["role"] as? String, "user", file: file, line: line)
+        for (a, b) in zip(msgs, msgs.dropFirst()) {
+            XCTAssertNotEqual(a["role"] as? String, b["role"] as? String, "roles must alternate", file: file, line: line)
+        }
+        for (i, m) in msgs.enumerated() where m["role"] as? String == "assistant" {
+            let ids = (m["content"] as? [JSONObject] ?? []).filter { $0["type"] as? String == "tool_use" }.compactMap { $0["id"] as? String }
+            guard !ids.isEmpty else { continue }
+            XCTAssertLessThan(i + 1, msgs.count, "tool_use can't be last", file: file, line: line)
+            let next = (msgs[i + 1]["content"] as? [JSONObject] ?? [])
+            let answered = Set(next.filter { $0["type"] as? String == "tool_result" }.compactMap { $0["tool_use_id"] as? String })
+            XCTAssertEqual(Set(ids), answered, "every tool_use needs a tool_result right after", file: file, line: line)
+            XCTAssertEqual(next.first?["type"] as? String, "tool_result", "results come first in the user message", file: file, line: line)
+        }
+    }
+
+    func testRepairsTheExactHistoryFromTheLog() {
+        // Shape from the log: … assistant:[text,tool_use] user:str(26) user:str(25)
+        let broken: [JSONObject] = [
+            ["role": "user", "content": "Check my email."],
+            ["role": "assistant", "content": [["type": "text", "text": "Checking."], ["type": "tool_use", "id": "t1", "name": "email_search", "input": [:]]]],
+            ["role": "user", "content": [["type": "tool_result", "tool_use_id": "t1", "content": "3 unread"]]],
+            ["role": "assistant", "content": [["type": "text", "text": "You have three."]]],
+            ["role": "user", "content": "Check the email from the"],
+            ["role": "assistant", "content": [["type": "text", "text": "Opening it."], ["type": "tool_use", "id": "toolu_X", "name": "email_read", "input": ["id": "1"]]]],
+            ["role": "user", "content": "Check the email from MLH."],
+            ["role": "user", "content": "Hello?"],
+        ]
+        let fixed = Brain.sanitized(broken)
+        assertValid(fixed)
+        let last = fixed.last?["content"] as? [JSONObject] ?? []
+        XCTAssertEqual(last.first?["tool_use_id"] as? String, "toolu_X")
+        XCTAssertEqual(last.filter { $0["type"] as? String == "text" }.count, 2, "both user messages kept, merged")
+    }
+
+    func testDropsOrphanResultsAndTrailingToolUse() {
+        let broken: [JSONObject] = [
+            ["role": "user", "content": [["type": "tool_result", "tool_use_id": "ghost", "content": "x"]]],
+            ["role": "user", "content": "hi"],
+            ["role": "assistant", "content": [["type": "tool_use", "id": "t9", "name": "weather", "input": [:]]]],
+        ]
+        let fixed = Brain.sanitized(broken)
+        assertValid(fixed)
+        XCTAssertEqual(fixed.count, 1)
+        XCTAssertEqual((fixed[0]["content"] as? [JSONObject])?.first?["text"] as? String, "hi")
+    }
+
+    func testValidHistoryIsUnchanged() {
+        let ok: [JSONObject] = [
+            ["role": "user", "content": [["type": "text", "text": "weather?"]]],
+            ["role": "assistant", "content": [["type": "tool_use", "id": "a", "name": "weather", "input": [:]]]],
+            ["role": "user", "content": [["type": "tool_result", "tool_use_id": "a", "content": "13°C"]]],
+            ["role": "assistant", "content": [["type": "text", "text": "Thirteen degrees."]]],
+        ]
+        let fixed = Brain.sanitized(ok)
+        assertValid(fixed)
+        XCTAssertEqual(fixed.count, 4)
+        XCTAssertEqual(Brain.describe(fixed), Brain.describe(ok))
+    }
+
+    func testTrimKeepsPairsTogether() {
+        var msgs: [JSONObject] = [["role": "user", "content": "start"]]
+        for i in 0..<20 {
+            msgs.append(["role": "assistant", "content": [["type": "tool_use", "id": "t\(i)", "name": "x", "input": [:]]]])
+            msgs.append(["role": "user", "content": [["type": "tool_result", "tool_use_id": "t\(i)", "content": "ok"], ["type": "text", "text": "next \(i)"]]])
+        }
+        assertValid(Brain.trimmed(msgs, max: 7))
+    }
+}

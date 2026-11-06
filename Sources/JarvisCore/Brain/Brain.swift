@@ -25,6 +25,8 @@ public final class Brain: ObservableObject {
     private let undo: UndoStack
 
     private var history: [JSONObject] = []
+    /// Incremented per cloud turn; only the newest turn may write `history`.
+    private var generation = 0
     private var lastActivity = Date.distantPast
     private let historyTimeout: TimeInterval = 10 * 60
     private let maxHistoryMessages = 24
@@ -60,6 +62,15 @@ public final class Brain: ObservableObject {
         pathMonitor.start(queue: DispatchQueue(label: "com.samarth.jarvis.network"))
     }
 
+    /// Called when the Jarvis card goes away: the next conversation starts fresh.
+    /// Nothing is lost: every exchange is already in conversations.log and memory.db.
+    public func endSession() {
+        guard !history.isEmpty else { return }
+        JarvisLog.info("Chat ended: cleared \(history.count) message(s) from the active conversation (kept in conversations.log)")
+        history.removeAll()
+        generation += 1
+    }
+
     public func clearHistory() {
         history.removeAll()
         JarvisLog.info("Conversation history cleared")
@@ -67,6 +78,17 @@ public final class Brain: ObservableObject {
 
     /// Streams the reply text through `onText` as it arrives; returns the full turn when done.
     public func respond(to userText: String, onText: @escaping (String) -> Void) async throws -> Turn {
+        do {
+            return try await respondOnce(to: userText, onText: onText)
+        } catch ClaudeClient.ClientError.http(400, let msg) {
+            // Never leave Sam stuck behind a bad history: forget it and try once more.
+            JarvisLog.warn("400 from Claude (\(msg.prefix(120))); clearing conversation history and retrying once")
+            history.removeAll()
+            return try await respondOnce(to: userText, onText: onText)
+        }
+    }
+
+    private func respondOnce(to userText: String, onText: @escaping (String) -> Void) async throws -> Turn {
         if Date().timeIntervalSince(lastActivity) > historyTimeout { history.removeAll() }
         lastActivity = Date()
         var turn = Turn()
@@ -89,8 +111,14 @@ public final class Brain: ObservableObject {
             return turn
         }
 
-        history.append(["role": "user", "content": userText])
-        trimHistory()
+        generation += 1
+        let myGeneration = generation
+        var convo = Self.trimmed(Self.sanitized(history) + [["role": "user", "content": userText]], max: maxHistoryMessages)
+        defer {
+            // A newer turn may have started while this one awaited the network or a tool; only the
+            // latest turn writes history, and always as a complete tool_use/tool_result sequence.
+            if myGeneration == generation { history = Self.sanitized(convo) }
+        }
         let mode = modes.current
         var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
         if let catalog = skills?.catalog { stable += "\n\n" + catalog }          // changes only when skills are installed
@@ -100,8 +128,8 @@ public final class Brain: ObservableObject {
         defer { if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) } }
 
         for round in 0...maxToolRounds {
-            history = Self.sanitized(history)
-            var request = ClaudeClient.Request(model: model, system: stable, messages: history, tools: tools,
+            convo = Self.sanitized(convo)
+            var request = ClaudeClient.Request(model: model, system: stable, messages: convo, tools: tools,
                                                maxTokens: config.profile.claude.maxTokens, effort: "low")
             request.systemVolatile = volatile
             var assistantContent: [JSONObject] = []
@@ -144,7 +172,7 @@ public final class Brain: ObservableObject {
                 }
             }
             } catch let e as ClaudeClient.ClientError {
-                if case .http(400, _) = e { JarvisLog.error("400 request shape: \(Self.describe(history))") }
+                if case .http(400, _) = e { JarvisLog.error("400 request shape: \(Self.describe(convo))") }
                 throw e
             }
             if !currentText.isEmpty { assistantContent.append(["type": "text", "text": currentText]) }
@@ -152,11 +180,11 @@ public final class Brain: ObservableObject {
             if assistantContent.isEmpty {
                 // Empty reply (cut off, refused, or nothing to say): don't poison the history with an empty block.
                 JarvisLog.warn("Claude returned no content (stop: \(stopReason)); dropping this exchange from history")
-                history.removeLast() // the user message we just added, or the tool results
+                convo.removeLast() // the user message we just added, or the tool results
                 if turn.text.isEmpty && !turn.refused { turn.text = "Sorry, I lost that one. Say it again?"; onText(turn.text) }
                 return turn
             }
-            history.append(["role": "assistant", "content": assistantContent])
+            convo.append(["role": "assistant", "content": assistantContent])
 
             let toolUses = assistantContent.filter { $0["type"] as? String == "tool_use" }
             if turn.refused {
@@ -187,7 +215,8 @@ public final class Brain: ObservableObject {
                 results.append(["type": "tool_result", "tool_use_id": use["id"] as? String ?? "",
                                 "content": result.content, "is_error": result.isError])
             }
-            history.append(["role": "user", "content": results])
+            convo.append(["role": "user", "content": results])
+            if Task.isCancelled { return turn }   // results are recorded, so the history stays valid
         }
         return turn
     }
@@ -239,30 +268,83 @@ public final class Brain: ObservableObject {
         return turn
     }
 
-    /// Drops empty text blocks and content-less messages so a bad turn can never break the next one.
-    static func sanitized(_ messages: [JSONObject]) -> [JSONObject] {
-        messages.compactMap { m in
-            var m = m
-            if let s = m["content"] as? String { return s.isEmpty ? nil : m }
-            guard let blocks = m["content"] as? [JSONObject] else { return nil }
-            let kept = blocks.filter { b in
-                if b["type"] as? String == "text" { return !((b["text"] as? String) ?? "").isEmpty }
-                if b["type"] as? String == "tool_result" {
-                    return true
-                }
-                return true
-            }.map { b -> JSONObject in
+    /// Repairs a history so it is always valid for the Messages API, whatever happened before:
+    ///  - drops empty text blocks and empty messages
+    ///  - every assistant tool_use gets a tool_result in the next user message (missing ones become "interrupted")
+    ///  - tool_results that don't answer the preceding assistant's tool_use are dropped
+    ///  - consecutive messages from the same role are merged
+    ///  - the history starts with a plain user message
+    nonisolated static func sanitized(_ messages: [JSONObject]) -> [JSONObject] {
+        func blocks(_ m: JSONObject) -> [JSONObject] {
+            if let s = m["content"] as? String { return s.isEmpty ? [] : [["type": "text", "text": s]] }
+            return (m["content"] as? [JSONObject] ?? []).compactMap { b in
                 var b = b
-                if b["type"] as? String == "tool_result", ((b["content"] as? String) ?? "").isEmpty { b["content"] = "(no output)" }
-                return b
+                switch b["type"] as? String {
+                case "text": return ((b["text"] as? String) ?? "").isEmpty ? nil : b
+                case "tool_result":
+                    if ((b["content"] as? String) ?? "").isEmpty { b["content"] = "(no output)" }
+                    return b
+                default: return b
+                }
             }
-            if kept.isEmpty { return nil }
-            m["content"] = kept
-            return m
         }
+        // Normalise + merge same-role runs.
+        var merged: [(role: String, blocks: [JSONObject])] = []
+        for m in messages {
+            guard let role = m["role"] as? String, role == "user" || role == "assistant" else { continue }
+            let b = blocks(m)
+            guard !b.isEmpty else { continue }
+            if let last = merged.last, last.role == role { merged[merged.count - 1].blocks += b } else { merged.append((role, b)) }
+        }
+        // Pair tool_use with tool_result.
+        var out: [(role: String, blocks: [JSONObject])] = []
+        var pendingIDs: [String] = []
+        for var m in merged {
+            if m.role == "user" {
+                // Keep only results answering the previous assistant turn, in front of any text.
+                let results = m.blocks.filter { $0["type"] as? String == "tool_result" && pendingIDs.contains($0["tool_use_id"] as? String ?? "") }
+                let others = m.blocks.filter { $0["type"] as? String != "tool_result" }
+                let answered = Set(results.compactMap { $0["tool_use_id"] as? String })
+                let missing = pendingIDs.filter { !answered.contains($0) }.map { id -> JSONObject in
+                    ["type": "tool_result", "tool_use_id": id, "content": "Interrupted before this finished.", "is_error": true]
+                }
+                m.blocks = results + missing + others
+                pendingIDs = []
+                if m.blocks.isEmpty { continue }
+            } else {
+                if !pendingIDs.isEmpty {
+                    // Assistant followed assistant with unanswered tool calls: insert the results.
+                    out.append(("user", pendingIDs.map { ["type": "tool_result", "tool_use_id": $0, "content": "Interrupted before this finished.", "is_error": true] }))
+                    pendingIDs = []
+                }
+                pendingIDs = m.blocks.filter { $0["type"] as? String == "tool_use" }.compactMap { $0["id"] as? String }
+            }
+            if let last = out.last, last.role == m.role { out[out.count - 1].blocks += m.blocks } else { out.append(m) }
+        }
+        // A trailing assistant tool_use with no answer can't be sent; drop those blocks.
+        if !pendingIDs.isEmpty, var last = out.popLast() {
+            last.blocks = last.blocks.filter { $0["type"] as? String != "tool_use" }
+            if !last.blocks.isEmpty { out.append(last) }
+        }
+        // Must start with a user message that isn't only tool results.
+        while let first = out.first, first.role != "user" || first.blocks.allSatisfy({ $0["type"] as? String == "tool_result" }) {
+            out.removeFirst()
+            if let f = out.first, f.role == "user" {
+                let kept = f.blocks.filter { $0["type"] as? String != "tool_result" }
+                if kept.isEmpty { continue }
+                out[0].blocks = kept
+            }
+        }
+        return out.map { ["role": $0.role, "content": $0.blocks] }
     }
 
-    static func describe(_ messages: [JSONObject]) -> String {
+    /// Keeps the last `max` messages without splitting a tool_use / tool_result pair.
+    nonisolated static func trimmed(_ messages: [JSONObject], max: Int) -> [JSONObject] {
+        guard messages.count > max else { return messages }
+        return sanitized(Array(messages.suffix(max)))
+    }
+
+    nonisolated static func describe(_ messages: [JSONObject]) -> String {
         messages.map { m in
             let role = m["role"] as? String ?? "?"
             if let s = m["content"] as? String { return "\(role):str(\(s.count))" }

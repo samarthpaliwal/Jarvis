@@ -149,6 +149,9 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         counts.isEnabled = false
         mem.addItem(counts)
         mem.addItem(ClosureMenuItem(title: "Open Memory Folder (MEMORY.md, USER.md)", symbol: "folder") { [memory] in NSWorkspace.shared.open(memory.directory) })
+        mem.addItem(ClosureMenuItem(title: "Open Chat Log", symbol: "text.bubble") {
+            NSWorkspace.shared.open(JarvisLog.logDirectory.appendingPathComponent("conversations.log"))
+        })
         mem.addItem(ClosureMenuItem(title: "Forget Conversation History", symbol: "trash") { [memory, notch] in
             memory.clearConversations(); notch.flash("Conversation history forgotten. Facts and profile kept.")
         })

@@ -6,6 +6,18 @@ import os
 public enum JarvisLog {
     private static let logger = Logger(subsystem: "com.samarth.jarvis", category: "app")
     private static let file = FileLog(name: "jarvis.log")
+    private static let chat = FileLog(name: "conversations.log")
+
+    /// Every exchange, in plain text: ~/Library/Logs/Jarvis/conversations.log (secrets redacted).
+    public static func conversation(you: String, jarvis: String, tools: [String]) {
+        let t = tools.isEmpty ? "" : "  [tools: \(tools.joined(separator: ", "))]"
+        chat.write(level: "CHAT", SecretRedactor.redact("You: \(you)\n    Jarvis: \(jarvis)\(t)").text)
+    }
+
+    /// Marks the end of a chat session in conversations.log.
+    public static func conversationEnded() {
+        chat.write(level: "CHAT", "— chat ended —")
+    }
 
     public static var logDirectory: URL { FileLog.directory }
 

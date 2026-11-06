@@ -343,6 +343,7 @@ public final class ConversationController: ObservableObject {
         else { notch.cancelCollapse(); for c in turn.cards { notch.addCard(c) } }
         if turn.text.isEmpty && turn.cards.isEmpty { notch.replyText = "Done." }
         notch.logExchange(you: lastUserText, jarvis: turn.text)
+        JarvisLog.conversation(you: lastUserText, jarvis: turn.text, tools: turn.toolCalls)
 
         guard voiceOn else {
             state = .idle

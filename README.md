@@ -495,6 +495,12 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 
 ## Changelog
 
+### 0.9.2 — Email fixes, one chat at a time (2026-11-06)
+- Fixed "API error 400" after interrupting Jarvis mid-request: each turn now commits its history atomically, any malformed history is repaired before sending (every tool_use gets a tool_result, same-role messages merged), and a 400 retries once with a clean history.
+- Gmail search fetches messages in parallel: 9.4 s → 0.5 s for an inbox search.
+- One chat at a time: when the card disappears, the conversation ends and the next one starts fresh. The HUD no longer lists earlier exchanges. Every exchange is kept in `~/Library/Logs/Jarvis/conversations.log` (menu → Memory → Open Chat Log) and stays searchable through memory.
+- Fixed Gmail sign-in: the OAuth redirect used port 0. 103 tests.
+
 ### 0.9.1 — Free neural voice (2026-11-06)
 - Kokoro-82M on-device voice (free, offline, no key): `scripts/setup-kokoro.sh`, `voice/kokoro_server.py`, app-managed server with auto-restart. Auto engine order: ElevenLabs key → OpenAI key → Kokoro → Apple. British voices in the menu. 98 tests.
 

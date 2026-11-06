@@ -34,11 +34,16 @@ public final class GmailClient: @unchecked Sendable {
     public func search(_ q: String, limit: Int = 10) async throws -> [Message] {
         let list = try await get("messages", query: ["q": q, "maxResults": String(limit)])
         let ids = (list["messages"] as? [JSONObject] ?? []).compactMap { $0["id"] as? String }
-        var out: [Message] = []
-        for id in ids {
-            if let m = try? await message(id: id, full: false) { out.append(m) }
+        // Fetch message headers in parallel (was one request at a time: ~9 s for 10 emails).
+        let fetched = await withTaskGroup(of: (Int, Message?).self) { group in
+            for (i, id) in ids.enumerated() {
+                group.addTask { (i, try? await self.message(id: id, full: false)) }
+            }
+            var acc: [(Int, Message?)] = []
+            for await r in group { acc.append(r) }
+            return acc
         }
-        return out
+        return fetched.sorted { $0.0 < $1.0 }.compactMap(\.1)   // keep Gmail's newest-first order
     }
 
     public func message(id: String, full: Bool) async throws -> Message {
