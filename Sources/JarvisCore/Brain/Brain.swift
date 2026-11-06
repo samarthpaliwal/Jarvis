@@ -14,6 +14,8 @@ public final class Brain: ObservableObject {
         public var cacheReadTokens = 0
         public var cacheWriteTokens = 0
         public var refused = false
+        /// "claude", "local", or "offline-matcher".
+        public var engine = "claude"
     }
 
     public let client: ClaudeClient
@@ -30,6 +32,17 @@ public final class Brain: ObservableObject {
 
     @Published public private(set) var isOnline = true
     private let pathMonitor = NWPathMonitor()
+    public var memory: MemoryStore?
+    public var skills: SkillLibrary?
+    public var local: OllamaClient?
+    /// Private Mode: every turn goes to the local model, nothing to the cloud.
+    @Published public var privateMode: Bool = UserDefaults.standard.bool(forKey: "jarvis.privateMode") {
+        didSet { UserDefaults.standard.set(privateMode, forKey: "jarvis.privateMode") }
+    }
+    /// Tools a small local model gets (a short list keeps it accurate).
+    static let localToolNames: Set<String> = ["system_status", "open_app", "set_volume", "media_control", "set_timer", "set_reminder",
+                                              "calendar_read", "calendar_create", "get_briefing", "set_mode", "undo_last_action",
+                                              "memory", "memory_search", "file_search", "set_brightness", "set_display_mode", "welcome_home"]
 
     public var model: String {
         ProcessInfo.processInfo.environment["CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 } ?? config.profile.claude.model
@@ -58,8 +71,20 @@ public final class Brain: ObservableObject {
         lastActivity = Date()
         var turn = Turn()
 
-        guard isOnline else {
+        let useLocal = privateMode || !isOnline
+        if useLocal {
+            if config.profile.local?.enabled ?? true, let local, await local.status().hasModel {
+                turn = try await respondLocally(userText, client: local, onText: onText)
+                memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls)
+                return turn
+            }
+            if privateMode && isOnline {
+                let msg = "Private Mode needs the local model. Start Ollama and pull \(config.profile.local?.model ?? "qwen3.5:9b"), or turn Private Mode off."
+                turn.text = msg; turn.engine = "none"; onText(msg)
+                return turn
+            }
             turn.text = try await LocalFallback.handle(userText, dispatcher: dispatcher, modes: modes)
+            turn.engine = "offline-matcher"
             onText(turn.text)
             return turn
         }
@@ -67,8 +92,12 @@ public final class Brain: ObservableObject {
         history.append(["role": "user", "content": userText])
         trimHistory()
         let mode = modes.current
-        let (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
+        var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
+        if let catalog = skills?.catalog { stable += "\n\n" + catalog }          // changes only when skills are installed
+        if config.profile.memory?.enabled ?? true, let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
         let tools = dispatcher.definitions(for: mode)
+        var guardian = LoopGuard()
+        defer { if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) } }
 
         for round in 0...maxToolRounds {
             history = Self.sanitized(history)
@@ -148,6 +177,11 @@ public final class Brain: ObservableObject {
                 let name = use["name"] as? String ?? ""
                 let input = use["input"] as? JSONObject ?? [:]
                 turn.toolCalls.append(name)
+                if let loop = guardian.check(tool: name, input: input) {
+                    JarvisLog.warn("LoopGuard: \(loop)")
+                    results.append(["type": "tool_result", "tool_use_id": use["id"] as? String ?? "", "content": loop, "is_error": true])
+                    continue
+                }
                 let result = await dispatcher.call(name, input: input, source: .user)
                 if let card = result.card { turn.cards.append(card) }
                 results.append(["type": "tool_result", "tool_use_id": use["id"] as? String ?? "",
@@ -155,6 +189,53 @@ public final class Brain: ObservableObject {
             }
             history.append(["role": "user", "content": results])
         }
+        return turn
+    }
+
+    // MARK: Local model (Ollama)
+
+    func respondLocally(_ userText: String, client: OllamaClient, onText: @escaping (String) -> Void) async throws -> Turn {
+        var turn = Turn()
+        turn.engine = "local"
+        let mode = modes.current
+        var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
+        if let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
+        stable += "\n\nYou are running on a local model on this Mac" + (privateMode ? " (Private Mode: nothing leaves the Mac)." : " because the internet is down.") +
+                  " Keep replies to one or two sentences. Only call a tool when needed."
+        var messages: [JSONObject] = [["role": "system", "content": stable + "\n\n" + volatile]]
+        // Carry over the last few plain-text exchanges from the cloud history.
+        for m in history.suffix(6) {
+            guard let role = m["role"] as? String else { continue }
+            if let s = m["content"] as? String { messages.append(["role": role, "content": s]); continue }
+            let text = (m["content"] as? [JSONObject] ?? []).compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined()
+            if !text.isEmpty { messages.append(["role": role, "content": text]) }
+        }
+        messages.append(["role": "user", "content": userText])
+        let tools = OllamaClient.tools(from: dispatcher.definitions(for: mode).filter { Self.localToolNames.contains($0["name"] as? String ?? "") })
+        var guardian = LoopGuard(budget: 6)
+        for round in 0..<4 {
+            let reply = try await client.chat(messages: messages, tools: tools, onText: { t in turn.text += t; onText(t) })
+            JarvisLog.info("Local round \(round): \(reply.text.count) chars, tools=\(reply.toolCalls.map(\.name))")
+            guard !reply.toolCalls.isEmpty else { break }
+            messages.append(["role": "assistant", "content": reply.text,
+                             "tool_calls": reply.toolCalls.map { ["function": ["name": $0.name, "arguments": $0.arguments]] }])
+            for call in reply.toolCalls {
+                turn.toolCalls.append(call.name)
+                let content: String
+                if let loop = guardian.check(tool: call.name, input: call.arguments) { content = loop }
+                else {
+                    let r = await dispatcher.call(call.name, input: call.arguments, source: .user)
+                    if let card = r.card { turn.cards.append(card) }
+                    content = r.content
+                }
+                messages.append(["role": "tool", "content": content, "tool_name": call.name])
+            }
+        }
+        if turn.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { turn.text = "Done."; onText("Done.") }
+        // Keep the exchange in the shared history so Claude can pick it up when back online.
+        history.append(["role": "user", "content": userText])
+        history.append(["role": "assistant", "content": [["type": "text", "text": turn.text]]])
+        trimHistory()
         return turn
     }
 

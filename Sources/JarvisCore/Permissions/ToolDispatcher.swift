@@ -119,8 +119,14 @@ public final class ToolDispatcher {
             record("approved", tier: .approve, summary: request.preview)
         }
         do {
-            let result = try await tool.run(input: input, context: context)
-            record(result.isError ? "failed" : "ran", tier: tool.tier, summary: result.summary)
+            var result = try await tool.run(input: input, context: context)
+            let redacted = SecretRedactor.redact(result.content)
+            if !redacted.kinds.isEmpty {
+                result.content = redacted.text
+                JarvisLog.warn("Redacted \(redacted.kinds.joined(separator: ", ")) from \(name) output")
+            }
+            record(result.isError ? "failed" : "ran", tier: tool.tier,
+                   summary: [result.summary, redacted.kinds.isEmpty ? nil : "redacted: \(redacted.kinds.joined(separator: ","))"].compactMap { $0 }.joined(separator: " · "))
             if tool.tier >= .free, let s = result.summary, !result.isError { onSummary?(s) }
             return result
         } catch {

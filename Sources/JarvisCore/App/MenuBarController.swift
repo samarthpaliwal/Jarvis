@@ -22,13 +22,23 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     private let context: ContextDetector
     private let hud: HUDWindowController
     private let scenes: SceneDirector
+    private let memory: MemoryStore
+    private let skills: SkillLibrary
+    private let local: OllamaClient
+    private let narrator: BriefingNarrator
+    private var localStatus = "checking…"
     private let menu = NSMenu()
 
     public init(config: ConfigStore, notch: NotchViewModel, notchWindow: NotchWindowController,
                 modes: ModeManager, demo: DemoDriver, wake: WakeWordService,
                 conversation: ConversationController, speech: AppleSpeechOutput, brain: Brain, log: ActionLog,
                 googleAuth: GoogleAuth, notion: NotionClient, briefing: BriefingService,
-                proactive: ProactiveScheduler, context: ContextDetector, hud: HUDWindowController, scenes: SceneDirector) {
+                proactive: ProactiveScheduler, context: ContextDetector, hud: HUDWindowController, scenes: SceneDirector,
+                memory: MemoryStore, skills: SkillLibrary, local: OllamaClient, narrator: BriefingNarrator) {
+        self.memory = memory
+        self.skills = skills
+        self.local = local
+        self.narrator = narrator
         self.proactive = proactive
         self.context = context
         self.hud = hud
@@ -120,12 +130,54 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return }
             conversation.ask(field.stringValue)
         })
-        menu.addItem(ClosureMenuItem(title: "Briefing Now", symbol: "sun.max") { [briefing, modes, conversation] in
+        menu.addItem(ClosureMenuItem(title: "Briefing Now", symbol: "sun.max") { [briefing, modes, conversation, narrator] in
             Task {
                 let r = await briefing.build(mode: modes.current)
-                conversation.deliver(r.spoken, cards: [.briefing(r.data)])
+                conversation.deliver(await narrator.narrate(r, kind: "briefing on request"), cards: [.briefing(r.data)])
             }
         })
+
+        // Memory, skills, local model (ported from OpenJarvis)
+        let mem = NSMenu()
+        let counts = NSMenuItem(title: "\(memory.entries(.profile).count) profile · \(memory.entries(.facts).count) facts · \(memory.count()) indexed", action: nil, keyEquivalent: "")
+        counts.isEnabled = false
+        mem.addItem(counts)
+        mem.addItem(ClosureMenuItem(title: "Open Memory Folder (MEMORY.md, USER.md)", symbol: "folder") { [memory] in NSWorkspace.shared.open(memory.directory) })
+        mem.addItem(ClosureMenuItem(title: "Forget Conversation History", symbol: "trash") { [memory, notch] in
+            memory.clearConversations(); notch.flash("Conversation history forgotten. Facts and profile kept.")
+        })
+        let memItem = NSMenuItem(title: "Memory", action: nil, keyEquivalent: "")
+        memItem.image = NSImage(systemSymbolName: "brain", accessibilityDescription: nil)
+        memItem.submenu = mem
+        menu.addItem(memItem)
+
+        let sk = NSMenu()
+        for s in skills.all { let i = NSMenuItem(title: "\(s.name): \(s.description.prefix(60))", action: nil, keyEquivalent: ""); i.isEnabled = false; sk.addItem(i) }
+        if skills.all.isEmpty { let i = NSMenuItem(title: "No skills installed", action: nil, keyEquivalent: ""); i.isEnabled = false; sk.addItem(i) }
+        sk.addItem(.separator())
+        sk.addItem(ClosureMenuItem(title: "Open Skills Folder", symbol: "folder") { [skills] in
+            try? FileManager.default.createDirectory(at: skills.directory, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(skills.directory)
+        })
+        sk.addItem(ClosureMenuItem(title: "Reload Skills", symbol: "arrow.clockwise") { [skills, notch] in skills.reload(); notch.flash("\(skills.all.count) skill(s) loaded") })
+        let skItem = NSMenuItem(title: "Skills (\(skills.all.count))", action: nil, keyEquivalent: "")
+        skItem.image = NSImage(systemSymbolName: "book.closed", accessibilityDescription: nil)
+        skItem.submenu = sk
+        menu.addItem(skItem)
+
+        let priv = ClosureMenuItem(title: "Private Mode (local model only, nothing to the cloud)", symbol: "lock.shield") { [brain, notch] in
+            brain.privateMode.toggle()
+            notch.flash(brain.privateMode ? "Private Mode on: local model only" : "Private Mode off")
+        }
+        priv.state = brain.privateMode ? .on : .off
+        menu.addItem(priv)
+        let ls = NSMenuItem(title: "Local model: \(local.model) · \(localStatus)", action: nil, keyEquivalent: "")
+        ls.isEnabled = false
+        menu.addItem(ls)
+        Task { [weak self, local] in
+            let s = await local.status()
+            self?.localStatus = !s.running ? "Ollama not running" : s.hasModel ? "ready" : "not pulled (ollama pull \(local.model))"
+        }
 
         // Integrations
         let integ = NSMenu()

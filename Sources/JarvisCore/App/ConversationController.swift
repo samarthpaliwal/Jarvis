@@ -30,7 +30,7 @@ public final class ConversationController: ObservableObject {
     }
     private var currentReply = ""
     private var lastUserText = ""
-    static let endWords: Set<String> = ["thanks", "thank", "thankyou", "bye", "goodbye", "later", "done", "nevermind", "never", "cheers", "nothing", "no"]
+    nonisolated static let endWords: Set<String> = ["thanks", "thank", "thankyou", "bye", "goodbye", "later", "done", "nevermind", "never", "cheers", "nothing", "no"]
 
     /// Set by the app: when a wake arrives while an arrival window is open, run the homecoming scene instead.
     public var homecomingIfArriving: (() -> Bool)?
@@ -260,8 +260,19 @@ public final class ConversationController: ObservableObject {
 
     /// Run a turn from typed text (menu "Ask by Text…", or the ask.txt debug hook). Same path as speech.
     public func ask(_ text: String) {
-        guard state == .idle || state == .speaking else { return }
-        if state == .speaking { speech.stop(); replyTask?.cancel() }
+        switch state {
+        case .thinking, .awaitingApproval:
+            JarvisLog.info("Text turn ignored: busy (\(state.rawValue))")
+            return
+        case .speaking:
+            speech.stop(); replyTask?.cancel(); transcriber.cancel(); listeningForStopOnly = false
+        case .listening:
+            // Typing during a (follow-up) listen replaces the spoken turn.
+            endpointTimer?.cancel(); transcriber.cancel(); wake.setPaused(false); onTurnActive?(false)
+        case .idle:
+            break
+        }
+        notch.isFollowUp = false
         turn += 1
         lastTurn = TurnStats(transcript: text)
         endpointer = Endpointer()

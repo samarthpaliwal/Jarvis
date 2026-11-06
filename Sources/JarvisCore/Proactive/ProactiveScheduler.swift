@@ -18,6 +18,8 @@ public final class ProactiveScheduler: ObservableObject {
     private let notch: NotchViewModel
     private let briefing: BriefingService
     private let deliver: (String, [NotchCard]) -> Void
+    /// Turns briefing data into a spoken briefing (Claude, JARVIS persona). Nil = template sentence.
+    public var narrate: ((BriefingService.Result, String) async -> String)?
     private var timer: Timer?
     private var observers: [Any] = []
     private let defaults = UserDefaults.standard
@@ -95,8 +97,9 @@ public final class ProactiveScheduler: ObservableObject {
         let r = await briefing.build(mode: modes.current)
         status.briefingDeliveredOn = todayKey
         defaults.set(todayKey, forKey: "jarvis.briefingDeliveredOn")
+        let text = await narrate?(r, "morning briefing") ?? r.spoken
         JarvisLog.info("Morning briefing delivered (\(trigger))")
-        deliver(r.spoken, [.briefing(r.data)])
+        deliver(text, [.briefing(r.data)])
     }
 
     /// Exam/deadline countdowns at the configured day marks, each said once.

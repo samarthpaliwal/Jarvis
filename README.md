@@ -369,6 +369,38 @@ shows the last three exchanges.
 Test hooks: write `!homecoming`, `!arrive`, or `!hud` to `~/Library/Application Support/Jarvis/ask.txt` and
 `kill -INFO $(pgrep -x Jarvis)`.
 
+## Ported from OpenJarvis
+
+[OpenJarvis](https://github.com/open-jarvis/openjarvis) (Stanford, Apache-2.0) is a Python/Rust/Tauri
+framework for local-first personal AI. Switching stacks would have dropped the native notch, wake word,
+and permission dispatcher, so instead these ideas were re-implemented in Swift:
+
+| From OpenJarvis | Here |
+|---|---|
+| `memory_manage` / `user_profile_manage` (MEMORY.md, USER.md) + SQLite FTS5 memory | `memory` tool (Tier 1, undoable) writes `MEMORY.md` / `USER.md` in `~/Library/Application Support/Jarvis`, injected into every turn. Every exchange is indexed in `memory.db` (FTS5, secrets redacted first); `memory_search` answers "what did I ask you about…". Menu → Memory to open or forget history. |
+| `LoopGuard` | Blocks identical repeated tool calls, A↔B ping-pong, and more than 12 tool calls per turn. |
+| `SecretScanner` / `credential_stripper` | Every tool result is scrubbed for API keys, tokens, private keys, passwords, DB URLs and card numbers before Claude sees it. Memory refuses secrets. |
+| `InjectionScanner` | Untrusted content (email, web, files, calendar) matching injection patterns is labelled with a warning Claude must heed and report. |
+| `jarvis.md` persona | Briefing rules: only facts from the data, skip missing sources silently, "sir" sparingly. |
+| Morning digest (LLM-synthesised, world section) | Briefings are now written by Claude in JARVIS's voice, with weather (Open-Meteo, keyless, city name only) and top headlines (Hacker News). New `weather` and `news_headlines` tools. Falls back to the template if Claude is slow or unreachable. |
+| Local-first engine (Ollama) | When offline, or always in **Private Mode** (menu), turns go to a local model through Ollama with a trimmed tool set. `profile.json → local.model` (default `qwen3.5:9b`). |
+| Skills (agentskills.io `SKILL.md`) | Folders in `~/Library/Application Support/Jarvis/skills`; the catalog goes in the prompt and `use_skill` loads one. Ships with `exam-prep`. Skills are instructions only; permission tiers still apply. |
+
+Not ported, on purpose: their Python agent zoo, the browser GUI, iMessage (needs Full Disk Access),
+Oura/Strava connectors, training/learning loops, and crypto "Pearl mining".
+
+**Local model setup** (one time, ~6 GB download):
+
+```bash
+ollama serve
+```
+
+```bash
+ollama pull qwen3.5:9b
+```
+
+The menu shows "Local model: … ready" once it's available.
+
 ## Safety model (enforced in code, Milestone 4)
 
 Every tool call goes through `ToolDispatcher` ([Permissions/ToolDispatcher.swift](Sources/JarvisCore/Permissions/ToolDispatcher.swift)), in this order:
@@ -425,6 +457,15 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.8.0 — OpenJarvis port (2026-11-06)
+- Persistent memory (MEMORY.md, USER.md, FTS5 conversation index) with `memory` and `memory_search` tools; injected into every turn.
+- LoopGuard, secret redaction of all tool output, prompt-injection labelling of untrusted content.
+- Claude-narrated briefings in JARVIS's voice with weather and headlines; `weather`, `news_headlines` tools.
+- Ollama local engine for offline use and Private Mode.
+- SKILL.md skills with `use_skill`; ships `exam-prep`.
+- Fix: typed or menu questions were ignored while Jarvis was listening for a follow-up.
+- Verified live: narrated briefing, "remember my lab partner is Maya" → USER.md → recalled next turn. 89 tests.
 
 ### 0.7.1 — Conversation flow + G5 (2026-11-05)
 - HUD on a preferred display (`hud.preferredDisplay`, default "Odyssey G5"), fallback to the notch screen.

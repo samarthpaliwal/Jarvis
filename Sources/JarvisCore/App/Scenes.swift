@@ -9,6 +9,7 @@ public final class SceneDirector {
     private let modes: ModeManager
     private let config: ConfigStore
     private var lastHomecoming = Date.distantPast
+    public var narrate: ((BriefingService.Result, String) async -> String)?
 
     public init(conversation: ConversationController, hud: HUDWindowController, briefing: BriefingService, modes: ModeManager, config: ConfigStore) {
         self.conversation = conversation; self.hud = hud; self.briefing = briefing; self.modes = modes; self.config = config
@@ -48,7 +49,9 @@ public final class SceneDirector {
                            "\(greeting), \(name). Good to have you home."]
             let status = r.data.tasks.isEmpty ? "Nothing pending today." : "\(r.data.tasks.count) item\(r.data.tasks.count == 1 ? "" : "s") on the board today."
             let exam = r.data.exams.first.flatMap { e in e.daysLeft.map { "\(e.title) in \($0) day\($0 == 1 ? "" : "s")." } } ?? ""
-            self.conversation.deliver([openers.randomElement()!, status, exam].filter { !$0.isEmpty }.joined(separator: " "),
+            let template = [openers.randomElement()!, status, exam].filter { !$0.isEmpty }.joined(separator: " ")
+            let line = await self.narrate?(r, "homecoming: he just walked in the door, welcome him home first") ?? template
+            self.conversation.deliver(line,
                                       cards: [.briefing(r.data)]) { [weak self] in
                 self?.hud.sceneEnded()
             }

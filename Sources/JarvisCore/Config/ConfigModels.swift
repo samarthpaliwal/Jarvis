@@ -41,6 +41,48 @@ public struct Profile: Codable, Equatable {
             homecomingOnHeyJarvis = try c.decodeIfPresent(Bool.self, forKey: .homecomingOnHeyJarvis) ?? true
         }
     }
+    public struct World: Codable, Equatable {
+        public var weatherCity: String?
+        public var units: String
+        public var headlines: Int
+        private enum CodingKeys: String, CodingKey { case weatherCity, units, headlines }
+        public init(weatherCity: String? = nil, units: String = "celsius", headlines: Int = 2) { self.weatherCity = weatherCity; self.units = units; self.headlines = headlines }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            weatherCity = try c.decodeIfPresent(String.self, forKey: .weatherCity)
+            units = try c.decodeIfPresent(String.self, forKey: .units) ?? "celsius"
+            headlines = try c.decodeIfPresent(Int.self, forKey: .headlines) ?? 2
+        }
+    }
+    /// Local model through Ollama: used offline, or always in Private Mode.
+    public struct Local: Codable, Equatable {
+        public var enabled: Bool
+        public var model: String
+        public var baseURL: String
+        public var privateMode: Bool
+        private enum CodingKeys: String, CodingKey { case enabled, model, baseURL, privateMode }
+        public init(enabled: Bool = true, model: String = "qwen3.5:9b", baseURL: String = "http://127.0.0.1:11434", privateMode: Bool = false) {
+            self.enabled = enabled; self.model = model; self.baseURL = baseURL; self.privateMode = privateMode
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+            model = try c.decodeIfPresent(String.self, forKey: .model) ?? "qwen3.5:9b"
+            baseURL = try c.decodeIfPresent(String.self, forKey: .baseURL) ?? "http://127.0.0.1:11434"
+            privateMode = try c.decodeIfPresent(Bool.self, forKey: .privateMode) ?? false
+        }
+    }
+    public struct MemoryConfig: Codable, Equatable {
+        public var enabled: Bool
+        public var archiveConversations: Bool
+        private enum CodingKeys: String, CodingKey { case enabled, archiveConversations }
+        public init(enabled: Bool = true, archiveConversations: Bool = true) { self.enabled = enabled; self.archiveConversations = archiveConversations }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+            archiveConversations = try c.decodeIfPresent(Bool.self, forKey: .archiveConversations) ?? true
+        }
+    }
     public struct HUD: Codable, Equatable {
         public var fullScreenAlways: Bool
         public var fullScreenForScenes: Bool
@@ -185,6 +227,9 @@ public struct Profile: Codable, Equatable {
     public var speech: Speech?
     public var wake: Wake?
     public var hud: HUD?
+    public var world: World?
+    public var local: Local?
+    public var memory: MemoryConfig?
 
     /// Used when profile.json is missing or malformed so the app still launches.
     public static let fallback = Profile(
@@ -201,7 +246,8 @@ public struct Profile: Codable, Equatable {
         proactive: Proactive(breakReminders: false, breakAfterMinutes: 90, quietHoursStart: "22:30", quietHoursEnd: "06:00"),
         speech: Speech(locale: "en-US", silenceEndSeconds: 1.3, noSpeechTimeoutSeconds: 6, maxUtteranceSeconds: 20),
         wake: Wake(phrases: [WakePhrase(phrase: "wake up daddy's home", aliases: ["daddy's home", "daddy is home"], scene: "homecoming")]),
-        hud: HUD(preferredDisplay: "Odyssey G5")
+        hud: HUD(preferredDisplay: "Odyssey G5"),
+        world: World(), local: Local(), memory: MemoryConfig()
     )
 }
 

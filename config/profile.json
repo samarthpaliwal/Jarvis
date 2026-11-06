@@ -107,5 +107,22 @@
     "fullScreenForScenes": true,
     "dismissAfterSeconds": 8,
     "preferredDisplay": "Odyssey G5"
+  },
+  "world": {
+    "weatherCity": "Tucson",
+    "units": "celsius",
+    "headlines": 2
+  },
+  "local": {
+    "_comment": "Ollama local model (OpenJarvis-style local-first). Used when offline, or for every turn when privateMode is true. Pull it once: ollama pull qwen3.5:9b",
+    "enabled": true,
+    "model": "qwen3.5:9b",
+    "baseURL": "http://127.0.0.1:11434",
+    "privateMode": false
+  },
+  "memory": {
+    "_comment": "MEMORY.md, USER.md and memory.db live in ~/Library/Application Support/Jarvis. Nothing leaves the Mac except what is sent to Claude in a turn.",
+    "enabled": true,
+    "archiveConversations": true
   }
 }

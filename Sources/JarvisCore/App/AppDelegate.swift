@@ -30,6 +30,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var hud: HUDWindowController!
     public private(set) var spotter: PhraseSpotter!
     public private(set) var scenes: SceneDirector!
+    public private(set) var memory: MemoryStore!
+    public private(set) var skills: SkillLibrary!
+    public private(set) var world: WorldService!
+    public private(set) var narrator: BriefingNarrator!
+    public private(set) var local: OllamaClient!
     private var edgeGlow: EdgeGlowWindowController!
     private var debugSignals: DebugSignals?
 
@@ -61,6 +66,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             JarvisLog.info("Seeded editable config at \(ConfigLocator.userConfigDirectory.path)")
         }
         ConfigLocator.mergeNewDefaultKeys()
+        ConfigLocator.seedSkillsIfNeeded()
         config = ConfigStore()
         notch = NotchViewModel()
         notchWindow = NotchWindowController(model: notch)
@@ -82,6 +88,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         briefing = BriefingService(calendar: calendar, notion: notion, gmail: gmail, profile: { [config] in config!.profile })
         context = ContextDetector(calendar: calendar)
         moveLog = MoveLog()
+        memory = MemoryStore()
+        skills = SkillLibrary()
+        world = WorldService()
+        local = OllamaClient(baseURL: URL(string: config.profile.local?.baseURL ?? "http://127.0.0.1:11434")!,
+                             model: config.profile.local?.model ?? "qwen3.5:9b")
         dispatcher.register([
             SystemStatusTool(), OpenAppTool(), SetVolumeTool(), MediaControlTool(), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
@@ -91,8 +102,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             NotionSearchTool(client: notion), NotionCreateNoteTool(client: notion),
             SetBrightnessTool(), SetFocusTool(), RememberPlaceTool(detector: context),
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),
+            MemoryTool(store: memory), MemorySearchTool(store: memory), WeatherTool(world: world), NewsHeadlinesTool(world: world),
+            UseSkillTool(library: skills),
         ])
         brain = Brain(dispatcher: dispatcher, config: config, modes: modes, undo: undo)
+        brain.memory = memory
+        brain.skills = skills
+        brain.local = local
+        narrator = BriefingNarrator(client: brain.client, config: config, world: world)
         hud = HUDWindowController(model: notch, dismissAfter: config.profile.hud?.dismissAfterSeconds ?? 8,
                                   preferredDisplay: config.profile.hud?.preferredDisplay)
         conversation = ConversationController(notch: notch, wake: wake, transcriber: transcriber,
@@ -114,10 +131,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         proactive = ProactiveScheduler(config: config, modes: modes, notch: notch, briefing: briefing) { [weak self] text, cards in
             self?.conversation.deliver(text, cards: cards)
         }
+        proactive.narrate = { [weak self] r, kind in await self?.narrator.narrate(r, kind: kind) ?? r.spoken }
         proactive.start()
 
         // Scenes, second wake phrase, arrival window.
         scenes = SceneDirector(conversation: conversation, hud: hud, briefing: briefing, modes: modes, config: config)
+        scenes.narrate = { [weak self] r, kind in await self?.narrator.narrate(r, kind: kind) ?? r.spoken }
+        Task { [weak self] in
+            guard let self else { return }
+            let s = await self.local.status()
+            JarvisLog.info("Local model: Ollama \(s.running ? "running" : "not running"), \(self.local.model) \(s.hasModel ? "ready" : "not pulled"); memory: \(self.memory.entries(.facts).count) facts, \(self.memory.entries(.profile).count) profile, \(self.memory.count()) indexed; skills: \(self.skills.all.map(\.name))")
+        }
         let spotTranscriber = TranscriberFactory.make(locale: Locale(identifier: config.profile.speech?.locale ?? "en-US"))
         spotter = PhraseSpotter(transcriber: spotTranscriber, phrases: config.profile.wake?.phrases ?? [])
         spotter.onHit = { [weak self] hit in self?.scenes.run(hit.scene, trigger: "phrase “\(hit.phrase)”") }
@@ -142,7 +166,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar = MenuBarController(config: config, notch: notch, notchWindow: notchWindow, modes: modes,
                                     demo: demo, wake: wake, conversation: conversation, speech: speech, brain: brain, log: actionLog,
                                     googleAuth: googleAuth, notion: notion, briefing: briefing,
-                                    proactive: proactive, context: context, hud: hud, scenes: scenes)
+                                    proactive: proactive, context: context, hud: hud, scenes: scenes,
+                                    memory: memory, skills: skills, local: local, narrator: narrator)
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() == nil ? "MISSING" : "present")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
                                     onBriefing: { [weak self] in
@@ -162,6 +187,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!homecoming" { self.scenes.homecoming(trigger: "debug"); return }
                                             if q == "!arrive" { self.spotter.openWindow(minutes: 10, reason: "debug"); return }
                                             if q == "!hud" { self.hud.show(scene: false); return }
+                                            if q == "!brief" {
+                                                Task { let r = await self.briefing.build(mode: self.modes.current); self.conversation.deliver(await self.narrator.narrate(r, kind: "briefing on request"), cards: [.briefing(r.data)]) }
+                                                return
+                                            }
                                             JarvisLog.info("Text turn: “\(q)”")
                                             self.conversation.ask(q)
                                             return

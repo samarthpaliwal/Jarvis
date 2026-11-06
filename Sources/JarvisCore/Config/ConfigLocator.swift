@@ -64,6 +64,16 @@ public enum ConfigLocator {
         return seeded
     }
 
+    /// Copies bundled example skills into ~/Library/Application Support/Jarvis/skills the first time.
+    public static func seedSkillsIfNeeded() {
+        guard let source = (bundledConfigDirectory ?? developmentConfigDirectory)?.appendingPathComponent("skills"),
+              FileManager.default.fileExists(atPath: source.path) else { return }
+        let dest = userConfigDirectory.deletingLastPathComponent().appendingPathComponent("skills")
+        guard !FileManager.default.fileExists(atPath: dest.path) else { return }
+        try? FileManager.default.copyItem(at: source, to: dest)
+        JarvisLog.info("Seeded example skills at \(dest.path)")
+    }
+
     /// Adds keys that exist in the bundled defaults but are missing from the user's copy
     /// (top level and one level deep). Never changes values the user already has.
     @discardableResult
@@ -77,6 +87,7 @@ public enum ConfigLocator {
         var added: [String] = []
         for (k, v) in defaults {
             if user[k] == nil { user[k] = v; added.append(k); continue }
+            if k == "local" || k == "memory" || k == "world" { continue }
             if let dv = v as? [String: Any], var uv = user[k] as? [String: Any] {
                 for (k2, v2) in dv where uv[k2] == nil { uv[k2] = v2; added.append("\(k).\(k2)") }
                 if let dn = dv["notion"] as? [String: Any], var un = uv["notion"] as? [String: Any] {
