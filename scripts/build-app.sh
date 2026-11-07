@@ -8,6 +8,10 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${1:-release}"
+# Prefer the stable "Jarvis Dev" identity (scripts/make-dev-cert.sh) so Keychain/TCC grants survive rebuilds.
+if [ -z "${JARVIS_SIGN_IDENTITY:-}" ] && security find-identity -v -p codesigning 2>/dev/null | grep -q "\"Jarvis Dev\""; then
+  JARVIS_SIGN_IDENTITY="Jarvis Dev"
+fi
 IDENTITY="${JARVIS_SIGN_IDENTITY:--}"
 cd "$ROOT"
 

@@ -22,7 +22,9 @@ extendedKeyUsage = critical, codeSigning
 basicConstraints = critical, CA:false
 CNF
 openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -keyout "$TMP/key.pem" -out "$TMP/cert.pem" -config "$TMP/cert.cnf" >/dev/null 2>&1
-openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -out "$TMP/jarvis.p12" -passout pass:jarvis -name "$NAME"
+# OpenSSL 3 defaults to AES/PBKDF2 PKCS#12, which macOS `security import` rejects ("MAC verification failed").
+LEGACY=""; openssl version | grep -q "^OpenSSL 3" && LEGACY="-legacy"
+openssl pkcs12 -export $LEGACY -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -out "$TMP/jarvis.p12" -passout pass:jarvis -name "$NAME"
 LOGIN="$HOME/Library/Keychains/login.keychain-db"
 security import "$TMP/jarvis.p12" -k "$LOGIN" -P jarvis -T /usr/bin/codesign -T /usr/bin/security
 # Trust it for code signing (user scope). Expect a password prompt here.

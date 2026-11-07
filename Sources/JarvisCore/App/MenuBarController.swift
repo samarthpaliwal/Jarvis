@@ -132,8 +132,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             field.placeholderString = "What's left today?"
             alert.accessoryView = field
             alert.window.initialFirstResponder = field
-            NSApp.activate(ignoringOtherApps: true)
-            guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return }
+            guard alert.runFocusedModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return }
             conversation.ask(field.stringValue)
         })
         menu.addItem(ClosureMenuItem(title: "Briefing Now", symbol: "sun.max") { [briefing, modes, conversation, narrator] in
@@ -453,8 +452,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         field.placeholderString = "sk-ant-…  (⌘V works here too)"
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
-        NSApp.activate(ignoringOtherApps: true)
-        let response = alert.runModal()
+        let response = alert.runFocusedModal()
         guard response != .alertThirdButtonReturn else { return }
         var key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if response == .alertSecondButtonReturn || key.isEmpty {
@@ -485,8 +483,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         field.placeholderString = "⌘V works here too"
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
-        NSApp.activate(ignoringOtherApps: true)
-        let response = alert.runModal()
+        let response = alert.runFocusedModal()
         guard response != .alertThirdButtonReturn else { return }
         var v = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if response == .alertSecondButtonReturn || v.isEmpty {
@@ -510,8 +507,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         stack.addArrangedSubview(id); stack.addArrangedSubview(secret)
         alert.accessoryView = stack
         alert.window.initialFirstResponder = id
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runFocusedModal() == .alertFirstButtonReturn else { return }
         let cid = id.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), cs = secret.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cid.isEmpty, !cs.isEmpty else { notch.flash("Both fields are needed"); return }
         do {
@@ -534,8 +530,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         stack.addArrangedSubview(id); stack.addArrangedSubview(secret)
         alert.accessoryView = stack
         alert.window.initialFirstResponder = id
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runFocusedModal() == .alertFirstButtonReturn else { return }
         let cid = id.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cid.isEmpty else { return }
         do {
@@ -580,4 +575,30 @@ final class ClosureMenuItem: NSMenuItem {
     required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     @objc private func fire() { handler() }
+}
+
+extension NSAlert {
+    /// Runs the alert with real keyboard focus. Jarvis is a menu-bar (accessory) app, and recent macOS
+    /// ignores `activate(ignoringOtherApps:)` for those, so a plain runModal() shows the dialog while your
+    /// keystrokes still go to the app in front. Becoming a regular app for the dialog's lifetime fixes that.
+    @MainActor
+    func runFocusedModal() -> NSApplication.ModalResponse {
+        let previous = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        window.level = .modalPanel
+        // Once the modal loop is running, make the alert key and focus its first field.
+        let focus = Timer(timeInterval: 0.05, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                NSApp.activate()
+                self.window.makeKeyAndOrderFront(nil)
+                if let first = self.window.initialFirstResponder { self.window.makeFirstResponder(first) }
+            }
+        }
+        RunLoop.main.add(focus, forMode: .modalPanel)
+        let response = runModal()
+        NSApp.setActivationPolicy(previous)
+        return response
+    }
 }
