@@ -141,5 +141,11 @@
     "openAIInstructions": "Speak as JARVIS: a refined British AI butler. Smooth, warm, calm and measured, with a hint of dry wit. Natural pacing, never robotic.",
     "kokoroVoice": "bm_george",
     "kokoroSpeed": 1.0
+  },
+  "web": {
+    "enabled": true,
+    "maxSearchesPerTurn": 5,
+    "maxFetchesPerTurn": 3,
+    "deepResearch": false
   }
 }

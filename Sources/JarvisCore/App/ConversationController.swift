@@ -289,6 +289,7 @@ public final class ConversationController: ObservableObject {
     // MARK: Responding (streaming)
 
     private func respond(to text: String) async {
+        lastUserText = text   // spoken and typed turns both land here
         let mode = modes.current
         let voiceOn = mode.voice.enabled && !voiceMuted
         let volume = Float(mode.voice.volume)

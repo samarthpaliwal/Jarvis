@@ -123,7 +123,8 @@ public final class Brain: ObservableObject {
         var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
         if let catalog = skills?.catalog { stable += "\n\n" + catalog }          // changes only when skills are installed
         if config.profile.memory?.enabled ?? true, let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
-        let tools = dispatcher.definitions(for: mode)
+        // Web tools first so the cache breakpoint stays on the last custom tool.
+        let tools = Self.webTools(model: model, profile: config.profile, mode: mode) + dispatcher.definitions(for: mode)
         var guardian = LoopGuard()
         defer { if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) } }
 
@@ -137,6 +138,7 @@ public final class Brain: ObservableObject {
             var currentTool: (id: String, name: String, json: String)?
             var stopReason = "end_turn"
             var blockTypes: [String] = []
+            var needsGap = false   // text resuming after a web search needs a space ("Checking now. The…")
 
             let events = client.stream(request)
             do {
@@ -144,7 +146,11 @@ public final class Brain: ObservableObject {
                 switch event {
                 case .blockStart(let type):
                     blockTypes.append(type)
-                case .textDelta(let t):
+                case .textDelta(var t):
+                    if needsGap {
+                        needsGap = false
+                        if let last = turn.text.last, !last.isWhitespace, t.first.map({ !$0.isWhitespace }) ?? false { t = " " + t }
+                    }
                     currentText += t
                     turn.text += t
                     onText(t)
@@ -169,6 +175,19 @@ public final class Brain: ObservableObject {
                 case .refusal(let category):
                     turn.refused = true
                     JarvisLog.warn("Claude refused (category: \(category ?? "unknown"))")
+                case .serverBlock(let block):
+                    // Web search/fetch ran on Anthropic's side: keep the block verbatim so the next
+                    // request carries the call and its results exactly as the API sent them.
+                    if !currentText.isEmpty { assistantContent.append(["type": "text", "text": currentText]); currentText = "" }
+                    assistantContent.append(block)
+                    needsGap = true
+                    if block["type"] as? String == "server_tool_use" {
+                        let name = block["name"] as? String ?? "server_tool"
+                        let input = block["input"] as? JSONObject ?? [:]
+                        turn.toolCalls.append(name)
+                        dispatcher.recordServerTool(name, input: input)
+                        JarvisLog.info("Server tool \(name): \(input["query"] as? String ?? input["url"] as? String ?? "")")
+                    }
                 }
             }
             } catch let e as ClaudeClient.ClientError {
@@ -192,6 +211,8 @@ public final class Brain: ObservableObject {
                 if turn.text.isEmpty { turn.text = msg; onText(msg) }
                 return turn
             }
+            // A long server-side search loop pauses; re-send as-is and the API resumes it.
+            if stopReason == "pause_turn" { continue }
             guard stopReason == "tool_use", !toolUses.isEmpty else { return turn }
             guard round < maxToolRounds else {
                 let msg = " I've hit my tool limit for this request."
@@ -288,6 +309,22 @@ public final class Brain: ObservableObject {
                 }
             }
         }
+        // Server tool calls (web_search/web_fetch) and their results live in the same assistant message.
+        // Drop a call without its result unless it ends the conversation (that's a pause_turn to resume),
+        // and drop results whose call is gone.
+        func pairServerBlocks(_ blocks: [JSONObject], isLast: Bool) -> [JSONObject] {
+            let callIDs = Set(blocks.filter { $0["type"] as? String == "server_tool_use" }.compactMap { $0["id"] as? String })
+            let resultIDs = Set(blocks.filter { b in
+                let t = b["type"] as? String ?? ""
+                return t != "tool_result" && t.hasSuffix("_tool_result")
+            }.compactMap { $0["tool_use_id"] as? String })
+            return blocks.filter { b in
+                let t = b["type"] as? String ?? ""
+                if t == "server_tool_use" { return isLast || resultIDs.contains(b["id"] as? String ?? "") }
+                if t != "tool_result" && t.hasSuffix("_tool_result") { return callIDs.contains(b["tool_use_id"] as? String ?? "") }
+                return true
+            }
+        }
         // Normalise + merge same-role runs.
         var merged: [(role: String, blocks: [JSONObject])] = []
         for m in messages {
@@ -335,7 +372,35 @@ public final class Brain: ObservableObject {
                 out[0].blocks = kept
             }
         }
-        return out.map { ["role": $0.role, "content": $0.blocks] }
+        return out.enumerated().compactMap { i, m in
+            let b = m.role == "assistant" ? pairServerBlocks(m.blocks, isLast: i == out.count - 1) : m.blocks
+            return b.isEmpty ? nil : ["role": m.role, "content": b]
+        }
+    }
+
+    /// Anthropic's server-side web tools. The dynamic-filtering versions need a recent model.
+    nonisolated static func webTools(model: String, profile: Profile, mode: ModeDefinition, timeZone: TimeZone = .current) -> [JSONObject] {
+        let web = profile.web ?? Profile.Web()
+        guard web.enabled else { return [] }
+        // Voice wants the basic variants: the dynamic-filtering ones (_20260209) write and run code over the
+        // results, which takes several extra steps and makes Claude narrate them aloud ("let me inspect the
+        // result shape"). Opt in with web.deepResearch for long, text-only research.
+        let modern = web.deepResearch && ["claude-opus-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+                      "claude-sonnet-5", "claude-sonnet-4-6"].contains { model.hasPrefix($0) }
+        var tools: [JSONObject] = []
+        if ToolDispatcher.allowed("web_search", in: mode), web.maxSearchesPerTurn > 0 {
+            var location: JSONObject = ["type": "approximate", "timezone": timeZone.identifier]
+            // Only claim the home city when the Mac's clock says we're there (Sam travels to Singapore).
+            if timeZone.identifier == profile.homeTimeZone { location["city"] = profile.world?.weatherCity ?? profile.city }
+            else if timeZone.identifier == "Asia/Singapore" { location["city"] = "Singapore"; location["country"] = "SG" }
+            tools.append(["type": modern ? "web_search_20260209" : "web_search_20250305", "name": "web_search",
+                          "max_uses": web.maxSearchesPerTurn, "user_location": location])
+        }
+        if ToolDispatcher.allowed("web_fetch", in: mode), web.maxFetchesPerTurn > 0 {
+            tools.append(["type": modern ? "web_fetch_20260209" : "web_fetch_20250910", "name": "web_fetch",
+                          "max_uses": web.maxFetchesPerTurn, "max_content_tokens": 8000])
+        }
+        return tools
     }
 
     /// Keeps the last `max` messages without splitting a tool_use / tool_result pair.

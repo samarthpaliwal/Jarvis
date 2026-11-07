@@ -20,6 +20,10 @@ public final class AnalyzerSpeechTranscriber: Transcriber, @unchecked Sendable {
     private let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioCapture.sampleRate,
                                              channels: 1, interleaved: false)!
     private var generation = 0
+    /// Audio that arrives before the analyzer reports its format. Passing it through unconverted crashes
+    /// the Speech framework (EXC_BREAKPOINT in AnalyzerInput.init), so hold it until the format is known.
+    private var pending: [Float] = []
+    private static let maxPendingSamples = Int(AudioCapture.sampleRate * 3)
 
     public init(locale: Locale = Locale(identifier: "en-US")) {
         self.locale = locale
@@ -70,6 +74,9 @@ public final class AnalyzerSpeechTranscriber: Transcriber, @unchecked Sendable {
         self.transcriber = transcriber
         self.analyzer = analyzer
         self.input = continuation
+        self.analyzerFormat = nil
+        self.converter = nil
+        self.pending = []
         lock.unlock()
 
         resultsTask = Task { [weak self] in
@@ -112,21 +119,31 @@ public final class AnalyzerSpeechTranscriber: Transcriber, @unchecked Sendable {
         return gen == generation
     }
 
-    public func append(samples: [Float]) {
+    public func append(samples incoming: [Float]) {
         lock.lock()
         let continuation = input
         let converter = converter
         let format = analyzerFormat
+        var samples = incoming
+        if continuation != nil, format == nil {
+            // Analyzer not ready yet: keep the start of the utterance (last 3 s at most).
+            pending += incoming
+            if pending.count > Self.maxPendingSamples { pending.removeFirst(pending.count - Self.maxPendingSamples) }
+            lock.unlock()
+            return
+        }
+        if !pending.isEmpty { samples = pending + incoming; pending = [] }
         lock.unlock()
-        guard let continuation, !samples.isEmpty,
+        guard let continuation, let format, !samples.isEmpty,
               let src = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
         src.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { p in src.floatChannelData![0].update(from: p.baseAddress!, count: samples.count) }
 
-        guard let format, let converter, format != sourceFormat else {
+        if format == sourceFormat {
             continuation.yield(AnalyzerInput(buffer: src))
             return
         }
+        guard let converter else { return }
         let ratio = format.sampleRate / sourceFormat.sampleRate
         guard let dst = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(Double(samples.count) * ratio) + 32) else { return }
         var served = false
@@ -162,6 +179,7 @@ public final class AnalyzerSpeechTranscriber: Transcriber, @unchecked Sendable {
         self.analyzer = nil
         transcriber = nil
         resultsTask = nil
+        pending = []
         lock.unlock()
         continuation?.finish()
         task?.cancel()

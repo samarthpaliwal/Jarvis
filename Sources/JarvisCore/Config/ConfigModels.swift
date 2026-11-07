@@ -41,6 +41,26 @@ public struct Profile: Codable, Equatable {
             homecomingOnHeyJarvis = try c.decodeIfPresent(Bool.self, forKey: .homecomingOnHeyJarvis) ?? true
         }
     }
+    /// Web search and page reading, run on Anthropic's side (web_search / web_fetch server tools).
+    public struct Web: Codable, Equatable {
+        public var enabled: Bool
+        public var maxSearchesPerTurn: Int
+        public var maxFetchesPerTurn: Int
+        /// Dynamic-filtering search (Claude runs code over results). Slower and chattier; off for voice.
+        public var deepResearch: Bool
+        private enum CodingKeys: String, CodingKey { case enabled, maxSearchesPerTurn, maxFetchesPerTurn, deepResearch }
+        public init(enabled: Bool = true, maxSearchesPerTurn: Int = 5, maxFetchesPerTurn: Int = 3, deepResearch: Bool = false) {
+            self.enabled = enabled; self.maxSearchesPerTurn = maxSearchesPerTurn; self.maxFetchesPerTurn = maxFetchesPerTurn
+            self.deepResearch = deepResearch
+        }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+            maxSearchesPerTurn = try c.decodeIfPresent(Int.self, forKey: .maxSearchesPerTurn) ?? 5
+            maxFetchesPerTurn = try c.decodeIfPresent(Int.self, forKey: .maxFetchesPerTurn) ?? 3
+            deepResearch = try c.decodeIfPresent(Bool.self, forKey: .deepResearch) ?? false
+        }
+    }
     public struct World: Codable, Equatable {
         public var weatherCity: String?
         public var units: String
@@ -279,6 +299,7 @@ public struct Profile: Codable, Equatable {
     public var memory: MemoryConfig?
     public var ui: UI?
     public var voice: Voice?
+    public var web: Web?
 
     /// Used when profile.json is missing or malformed so the app still launches.
     public static let fallback = Profile(
@@ -296,7 +317,7 @@ public struct Profile: Codable, Equatable {
         speech: Speech(locale: "en-US", silenceEndSeconds: 1.3, noSpeechTimeoutSeconds: 6, maxUtteranceSeconds: 20),
         wake: Wake(phrases: [WakePhrase(phrase: "wake up daddy's home", aliases: ["daddy's home", "daddy is home"], scene: "homecoming")]),
         hud: HUD(preferredDisplay: nil),
-        world: World(), local: Local(), memory: MemoryConfig(), ui: UI(), voice: Voice()
+        world: World(), local: Local(), memory: MemoryConfig(), ui: UI(), voice: Voice(), web: Web()
     )
 }
 

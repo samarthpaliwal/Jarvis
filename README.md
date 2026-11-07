@@ -238,6 +238,22 @@ reads them and sends only ~700 fresh input tokens. The reply is spoken sentence 
 you hear the first sentence while the rest is still arriving. A `refusal` stop reason becomes
 "I can't help with that one."
 
+**Web search.** Jarvis can search the web and read pages on its own, with no approval needed, using
+Anthropic's server-side `web_search` and `web_fetch` tools. Ask "who won the Wildcats game", "is the Rec
+open tonight", or "find the link for that Tinder internship". Searches run on Anthropic's side, so there is
+no extra key or service. Each search is billed by Anthropic per use on top of tokens. Settings live in
+`profile.json → web`:
+
+```json
+"web": { "enabled": true, "maxSearchesPerTurn": 5, "maxFetchesPerTurn": 3, "deepResearch": false }
+```
+
+`deepResearch: true` switches to the dynamic-filtering versions (`_20260209`), which run code over the results.
+They're better for long research but slower, and Claude tends to narrate the steps aloud, so voice keeps the
+basic versions. Search location follows the Mac's time zone: Tucson at home, Singapore when you're there.
+Every search is logged to `actions.log` with source `claude-server`. Results are treated as untrusted
+content, like email, so they can never start an action, and Tier 2 still needs your approval.
+
 **Conversation memory** lasts 10 minutes of inactivity or 24 messages; *Clear Conversation* resets it.
 **Offline:** a small local matcher still handles modes, volume, timers, opening apps, undo, and status.
 
@@ -457,6 +473,7 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 
 | Tier | Behaviour | Tools today |
 |------|-----------|-------------|
+| 0 automatic | read-only, runs on Anthropic's side | `web_search`, `web_fetch` |
 | 0 automatic | read-only | `system_status`, `file_search`, `file_read`, `get_location_context`, `actions_today`, `get_briefing`, `calendar_read`, `email_search`, `email_read`, `notion_search` |
 | 1 free | reversible, logged, undoable | `open_app`, `set_volume`, `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
 | 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
@@ -494,6 +511,13 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.9.3 — Web search, stable signing (2026-11-07)
+- Jarvis can search the web and read pages freely, using Anthropic's server-side `web_search` and `web_fetch`. Server blocks are kept verbatim in the history, `pause_turn` resumes automatically, an interrupted search is repaired out of the history, and every search is logged. A web answer takes about 3 s.
+- Fixed a crash when listening started while Jarvis was speaking: audio that arrived before Apple's SpeechAnalyzer reported its format went in unconverted.
+- Text dialogs (API key, Spotify, and Google client) now take keyboard focus. Recent macOS ignored the old activation call for menu-bar apps.
+- `scripts/make-dev-cert.sh` works with OpenSSL 3, and `build-app.sh` signs with "Jarvis Dev" automatically, so the Keychain stops asking after every rebuild.
+- The chat log records typed questions correctly. 111 tests.
 
 ### 0.9.2 — Email fixes, one chat at a time (2026-11-06)
 - Fixed "API error 400" after interrupting Jarvis mid-request: each turn now commits its history atomically, any malformed history is repaired before sending (every tool_use gets a tool_result, same-role messages merged), and a 400 retries once with a clean history.

@@ -53,6 +53,13 @@ public final class ToolDispatcher {
         self.log = log
     }
 
+    /// Server-side tools (web_search, web_fetch) run on Anthropic's side, never through `call`, but are
+    /// still logged like every other tool call.
+    public func recordServerTool(_ name: String, input: JSONObject) {
+        log.record(ActionRecord(timestamp: Date(), tool: name, tier: Tier.auto.rawValue, source: "claude-server",
+                                input: Self.describe(input), outcome: "ran", summary: nil, durationMs: nil))
+    }
+
     public func register(_ tool: JarvisTool) { tools[tool.name] = tool }
     public func register(_ list: [JarvisTool]) { list.forEach(register) }
 
@@ -68,7 +75,7 @@ public final class ToolDispatcher {
         DenylistGuard(denylist: config.denylist, allowedFolders: config.allowedFolders)
     }
 
-    static func allowed(_ name: String, in mode: ModeDefinition) -> Bool {
+    nonisolated static func allowed(_ name: String, in mode: ModeDefinition) -> Bool {
         mode.allowedTools.contains("*") || mode.allowedTools.contains(name)
     }
 
