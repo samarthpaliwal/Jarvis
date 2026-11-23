@@ -515,6 +515,45 @@ ollama pull qwen3.5:9b
 
 The menu shows "Local model: … ready" once it's available.
 
+## Remote access: reaching Jarvis from your phone
+
+Jarvis can be reached from anywhere over [Tailscale](https://tailscale.com), a private network between
+your own devices. Nothing is opened to the public internet: no port forwarding, no public address, no
+Tailscale Funnel. Free on Tailscale's Personal plan.
+
+### Step 1: put the Mac and the phone on one tailnet (once, about five minutes)
+
+**On the Mac**
+
+1. Download the Standalone app, the variant Tailscale recommends:
+   <https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg>. Open it and install.
+2. Open Tailscale. Its onboarding asks to add a VPN configuration (and to allow its system extension);
+   allow both. This is how the private network interface gets created.
+3. Sign in (Google, Apple, GitHub, or Microsoft). That account is your tailnet.
+4. Optional, for the checker below to show device names: Tailscale → Settings → *CLI integration* →
+   *Show me how* → *Install Now*.
+
+**On the phone**
+
+1. Install Tailscale from the App Store or Play Store.
+2. *Get Started*, allow the VPN configuration, and log in with the same account as the Mac.
+
+**Check it**
+
+```bash
+scripts/tailscale-check.sh
+```
+
+It reports this Mac's private address (`100.x.y.z`), whether a phone is on the tailnet, and that Funnel
+(the one Tailscale feature that publishes to the internet) is off. It changes nothing.
+
+Things worth knowing:
+
+- Tailscale must be on, on both devices, for the phone to reach the Mac. The Mac must be awake.
+- Addresses in `100.64.0.0/10` are never routed on the public internet. Only devices signed in to your
+  tailnet can reach them, over an encrypted WireGuard tunnel.
+- Do not turn on Tailscale Funnel for anything Jarvis serves. Jarvis never does.
+
 ## Keys: Touch ID instead of the keychain password
 
 Jarvis keeps its API keys and tokens (Claude, Google, Notion, Spotify, ElevenLabs, OpenAI) in the macOS
