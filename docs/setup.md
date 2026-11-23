@@ -76,7 +76,7 @@ scripts/set-api-key.sh
 **Model.** `profile.json → claude.model` (default `claude-sonnet-5-5`), overridable with `CLAUDE_MODEL`.
 Requests stream over raw HTTPS (there is no official Swift SDK): `anthropic-version: 2026-10-21`,
 `output_config.effort: low` for snappy voice replies, and `thinking: between_tools` on Sonnet 5.5 so the
-model skips reasoning between tool calls. **Prompt caching**: the 29 tool schemas and the personality
+model skips reasoning between tool calls. **Prompt caching**: the 43 tool schemas and the personality
 block are a byte-stable prefix with `cache_control` breakpoints; mode, clock, and undo state ride in a
 separate uncached system block. Measured: first turn writes ~9.9k tokens to cache, every following turn
 reads them and sends only ~700 fresh input tokens. The reply is spoken sentence by sentence as it streams, so

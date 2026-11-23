@@ -1,10 +1,10 @@
 # Jarvis
 
-A personal voice assistant that lives in the MacBook notch. Say "Hey Jarvis", ask for something, and it
-answers out loud and gets it done: calendar, email, notes, music, the camera, files, the web. It is a
-native macOS menu bar app written in Swift, with the wake word, speech recognition and voice
-verification running on-device, Claude doing the thinking, and every action passing a permission system
-enforced in code.
+A voice assistant that lives in the MacBook notch: speech stays on-device, Claude does the reasoning, and every action passes a permission system enforced in code.
+
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![Swift 5.10](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)
+![macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS%2014%2B-Apple%20Silicon-black?logo=apple)
 
 <p align="center">
   <img src="docs/demo.gif" width="300" alt="The Jarvis phone app: pairing with a six-digit code, then asking a question and getting the answer">
@@ -12,7 +12,22 @@ enforced in code.
 
 <p align="center"><sub>The phone app talking to Jarvis on the Mac over a private Tailscale network: pair with a code, ask, get the answer.</sub></p>
 
-## What it does
+Say "Hey Jarvis", ask for something, and it answers out loud and gets it done: calendar, email, notes,
+music, the camera, files, the web. It is a native macOS menu bar app written in Swift.
+
+## Problem
+
+An assistant that can run shell commands, read email and change system settings is only useful if you can
+trust what it will not do. Instructions in a prompt are not a safety model: a model can be talked out of
+them, and so can anything that reads untrusted email or web pages on your behalf.
+
+## Approach
+
+Keep audio on the Mac, send only text to the model, and put a dispatcher between the model and every
+tool. The dispatcher, not the prompt, decides whether a call runs, needs a spoken or tapped approval, or
+is refused outright.
+
+### What it does
 
 - **Hands-free.** On-device wake word, on-device speech recognition, a natural on-device voice (Kokoro).
   Follow-up questions without repeating the wake word.
@@ -29,7 +44,7 @@ enforced in code.
 - **Stays up.** A launchd supervisor, a hang watchdog, retries, a daily spending cap, and a spoken reason
   when something fails.
 
-## How it works
+### How it works
 
 Every request passes through five stages. Each stage sits behind a small Swift protocol
 ([Pipeline/Stages.swift](Sources/JarvisCore/Pipeline/Stages.swift)), so it can be swapped or tested alone.
@@ -72,6 +87,20 @@ request through every stage into `trace.jsonl`, so latency is measured per stage
 | 5 Text to speech | [`TTS/`](Sources/JarvisCore/TTS) | on-device (Kokoro, Apple); cloud voices optional |
 
 More in [docs/architecture.md](docs/architecture.md).
+
+## Results
+
+- **43 tools** behind one dispatcher, each assigned to one of three permission tiers checked before every call.
+- **362 tests**, grouped by pipeline stage (see Tests below). Every stage runs against fakes, and the
+  whole pipeline runs end to end in a strict mode where an unexpected state change fails the test.
+- **Prompt caching:** the tool schemas and personality block form a byte-stable prefix. Measured: the
+  first turn writes about 9.9k tokens to the cache, and each following turn reads them and sends only
+  about 700 fresh input tokens.
+- **No audio leaves the Mac.** Wake word, speech recognition, speaker verification and the default voice
+  all run on-device; the Privacy menu lists exactly what is sent (text to Claude).
+
+Per-stage latency is traced for every request; `scripts/latency-report.py --last 50` prints the median,
+90th percentile and worst case from your own usage.
 
 ## Quick start
 
@@ -147,7 +176,12 @@ is logged. Details: [docs/privacy-and-security.md](docs/privacy-and-security.md)
 | [Known limitations](docs/known-limitations.md) | |
 | [Changelog](CHANGELOG.md) | |
 
-## Repository layout
+## Tech stack
+
+Swift, SwiftUI and AppKit, ONNX Runtime (openWakeWord, ECAPA-TDNN), Apple SpeechAnalyzer, the Claude API
+over streaming HTTPS, EventKit, Keychain and Touch ID, Kokoro TTS (Python), Tailscale for remote access.
+
+## Project structure
 
 ```
 Sources/
