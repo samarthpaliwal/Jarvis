@@ -1,5 +1,12 @@
 # Changelog
 
+### 0.15.0 — A second brain, and Siri (2026-11-23)
+- **gpt-oss:120b, hosted by Ollama**, next to Claude: it steps in by itself when Claude cannot answer, or can
+  be put first (menu → Brain). Nothing is installed or run on the Mac. Needs an Ollama API key.
+- **"Hey Siri, Ask Jarvis"** shortcut (`scripts/make-siri-shortcut.sh`).
+- README rewritten as a front page with an architecture diagram; documentation moved to `docs/`;
+  `scripts/test.sh` reports tests per pipeline stage.
+
 ### 0.14.1 — Call mode (2026-11-23)
 - **Phone app:** *Call* opens a hands-free, turn-after-turn conversation over the tailnet. Ends on Hang up,
   "bye", leaving the app, or 90 seconds of silence.

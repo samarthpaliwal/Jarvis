@@ -23,15 +23,19 @@ public struct PrivacySnapshot: Equatable, Sendable {
     /// "kokoro", "elevenlabs", "openai", or "apple".
     public var voiceEngine: String
     public var claudeConfigured: Bool
+    /// The hosted second brain in use (its model name), or nil when it has no key.
+    public var hostedModel: String?
+    /// Private Mode: thinking happens on this Mac only.
+    public var privateMode: Bool
     public var googleConnected: Bool
     public var notionConnected: Bool
     public var spotifyConnected: Bool
     public var remoteListening: Bool
     public var voiceIDEnrolled: Bool
-    public init(transcriber: String, transcriberUsesServer: Bool, voiceEngine: String, claudeConfigured: Bool, googleConnected: Bool,
+    public init(transcriber: String, transcriberUsesServer: Bool, voiceEngine: String, claudeConfigured: Bool, hostedModel: String? = nil, privateMode: Bool = false, googleConnected: Bool,
                 notionConnected: Bool, spotifyConnected: Bool, remoteListening: Bool, voiceIDEnrolled: Bool) {
         self.transcriber = transcriber; self.transcriberUsesServer = transcriberUsesServer; self.voiceEngine = voiceEngine
-        self.claudeConfigured = claudeConfigured; self.googleConnected = googleConnected; self.notionConnected = notionConnected
+        self.claudeConfigured = claudeConfigured; self.hostedModel = hostedModel; self.privateMode = privateMode; self.googleConnected = googleConnected; self.notionConnected = notionConnected
         self.spotifyConnected = spotifyConnected; self.remoteListening = remoteListening; self.voiceIDEnrolled = voiceIDEnrolled
     }
 }
@@ -50,7 +54,14 @@ public enum Privacy {
         if s.remoteListening {
             out.append(DataFlow(stage: "Remote access", kind: .audio, what: "recordings from your phone", destination: "This Mac, over your tailnet", leavesMac: false, when: "always"))
         }
-        if s.claudeConfigured {
+        if s.privateMode {
+            out.append(DataFlow(stage: "Thinking", kind: .text, what: "your request and the conversation (Private Mode: local model)", destination: "This Mac", leavesMac: false, when: "always"))
+        }
+        if let model = s.hostedModel, !s.privateMode {
+            out.append(DataFlow(stage: "Thinking (\(model))", kind: .text, what: "your request as text, the conversation so far, and what tools returned",
+                                destination: "Ollama", leavesMac: true, when: "when it is the chosen brain, or when Claude cannot answer"))
+        }
+        if s.claudeConfigured, !s.privateMode {
             out.append(DataFlow(stage: "Thinking", kind: .text, what: "your request as text, the conversation so far, and what tools returned (calendar, email, notes you asked about)",
                                 destination: "Anthropic", leavesMac: true, when: "every request"))
             out.append(DataFlow(stage: "Looking", kind: .image, what: "one camera frame or screenshot", destination: "Anthropic", leavesMac: true, when: "only when you ask Jarvis to look"))

@@ -87,7 +87,7 @@ public final class SecretVault: @unchecked Sendable {
 
     /// Everything Jarvis may store. The helper is only ever asked about these.
     public static let accounts = ["ANTHROPIC_API_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN",
-                                  "NOTION_TOKEN", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"]
+                                  "NOTION_TOKEN", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "ELEVENLABS_API_KEY", "OPENAI_API_KEY", "OLLAMA_API_KEY"]
 
     public struct UnlockReport: Equatable, Sendable {
         public var state: State

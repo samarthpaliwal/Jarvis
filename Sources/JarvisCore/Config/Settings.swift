@@ -200,6 +200,10 @@ public struct Tuning: Codable, Equatable, Sendable {
     /// Rotated files kept per log (jarvis.log.1 … .N).
     public var logKeepFiles: Int = 3
 
+    // The second cloud brain (a model hosted by Ollama; needs a key, set in the menu under Brain)
+    public var hostedModel: String = "gpt-oss:120b"
+    public var hostedBaseURL: String = "https://ollama.com"
+
     // Privacy and retention (0 days = keep forever)
     /// May speech recognition use Apple's servers when this Mac cannot do it on-device? "never" or "allow".
     public var cloudSpeechRecognition: String = "never"
@@ -284,6 +288,8 @@ public struct Tuning: Codable, Equatable, Sendable {
         echoWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .echoWindowSeconds) ?? echoWindowSeconds
         logMaxMegabytes = try c.decodeIfPresent(Double.self, forKey: .logMaxMegabytes) ?? logMaxMegabytes
         logKeepFiles = try c.decodeIfPresent(Int.self, forKey: .logKeepFiles) ?? logKeepFiles
+        hostedModel = try c.decodeIfPresent(String.self, forKey: .hostedModel) ?? hostedModel
+        hostedBaseURL = try c.decodeIfPresent(String.self, forKey: .hostedBaseURL) ?? hostedBaseURL
         cloudSpeechRecognition = try c.decodeIfPresent(String.self, forKey: .cloudSpeechRecognition) ?? cloudSpeechRecognition
         retainConversationsDays = try c.decodeIfPresent(Double.self, forKey: .retainConversationsDays) ?? retainConversationsDays
         retainTraceDays = try c.decodeIfPresent(Double.self, forKey: .retainTraceDays) ?? retainTraceDays

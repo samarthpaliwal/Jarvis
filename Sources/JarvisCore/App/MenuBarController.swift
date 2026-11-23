@@ -191,6 +191,36 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         skItem.submenu = sk
         menu.addItem(skItem)
 
+        // Which model does the thinking.
+        let brainItem = NSMenuItem(title: "Brain", action: nil, keyEquivalent: "")
+        brainItem.image = NSImage(systemSymbolName: "brain", accessibilityDescription: nil)
+        let brainMenu = NSMenu()
+        let hostedReady = brain.hosted?.hasKey ?? false
+        let hostedName = brain.hosted?.model ?? "hosted model"
+        let plan = Brain.plan(choice: brain.engineChoice, privateMode: brain.privateMode, online: brain.isOnline,
+                              claudeReady: KeychainStore.apiKey() != nil, hostedReady: hostedReady)
+        let now = NSMenuItem(title: "Answering now: " + (plan.first == .local ? "local model (Private Mode or offline)" : plan.first == .hosted ? hostedName : "Claude")
+                             + (plan.fallback.map { ", then \($0 == .hosted ? hostedName : "Claude") if that fails" } ?? ""), action: nil, keyEquivalent: "")
+        now.isEnabled = false
+        brainMenu.addItem(now)
+        brainMenu.addItem(.separator())
+        let useClaude = ClosureMenuItem(title: "Claude first", symbol: nil) { [brain, notch] in brain.engineChoice = "claude"; notch.flash("Claude answers; \(hostedName) steps in if Claude can't") }
+        useClaude.state = brain.engineChoice == "hosted" ? .off : .on
+        brainMenu.addItem(useClaude)
+        let useHosted = ClosureMenuItem(title: "\(hostedName) first" + (hostedReady ? "" : " (needs a key)"), symbol: nil) { [brain, notch] in
+            guard brain.hosted?.hasKey ?? false else { notch.flash("Set the Ollama API key first"); return }
+            brain.engineChoice = "hosted"; notch.flash("\(hostedName) answers; Claude steps in if it can't")
+        }
+        useHosted.state = brain.engineChoice == "hosted" ? .on : .off
+        brainMenu.addItem(useHosted)
+        brainMenu.addItem(.separator())
+        brainMenu.addItem(ClosureMenuItem(title: hostedReady ? "Change Ollama API Key…" : "Set Ollama API Key…", symbol: "key") { [notch] in
+            MenuBarController.promptForSecret(title: "Ollama API key", info: "From ollama.com → Settings → Keys. Stored in the Keychain behind Touch ID. With it, \(hostedName) runs on Ollama's servers: nothing is installed or started on this Mac, and requests it answers are sent to Ollama.",
+                                              account: OllamaClient.hostedKeyAccount, notch: notch)
+        })
+        brainItem.submenu = brainMenu
+        menu.addItem(brainItem)
+
         let priv = ClosureMenuItem(title: "Private Mode (local model only, nothing to the cloud)", symbol: "lock.shield") { [brain, notch] in
             brain.privateMode.toggle()
             notch.flash(brain.privateMode ? "Private Mode on: local model only" : "Private Mode off")

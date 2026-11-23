@@ -414,3 +414,30 @@ ollama pull qwen3.5:9b
 ```
 
 The menu shows "Local model: … ready" once it's available.
+
+## A second brain: gpt-oss 120B, hosted
+
+Jarvis can use a second model next to Claude: OpenAI's open-weight **gpt-oss:120b**, run on Ollama's
+servers. Nothing is installed or started on the Mac for it, and there is no command to run: Jarvis calls
+it over HTTPS when needed.
+
+**Set up (once).** Make an account at ollama.com, create an API key there (Settings → Keys), then Jarvis
+menu → *Brain* → *Set Ollama API Key…*. The key goes in the Keychain behind Touch ID like the others.
+The hosted model is billed by Ollama per use (about $0.15 per million input tokens and $0.60 per million
+output at the time of writing), so the account needs credit.
+
+**How the two work together** (menu → *Brain*, whose first line says who is answering right now):
+
+- *Claude first* (default): Claude answers. If Claude cannot (no key, the daily budget is used up, the
+  service is down or rate-limited), gpt-oss answers that request instead, by itself.
+- *gpt-oss first*: the other way round.
+- Without an Ollama key nothing changes: Jarvis behaves exactly as before.
+
+**What is the same:** the tools, the permission tiers, approvals, Voice ID, logging.
+**What gpt-oss does not have:** web search (that runs on Anthropic's side) and sight (no `look`).
+**Private Mode and offline** never use it: a hosted model is still someone else's computer. Its requests
+go to Ollama, which the *Privacy* menu shows once a key is set. Its cost is not counted by Jarvis's daily
+budget; Ollama's own dashboard shows it.
+
+Settings: `hostedModel` (`gpt-oss:120b`), `hostedBaseURL` (`https://ollama.com`).
+

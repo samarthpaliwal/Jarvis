@@ -171,6 +171,8 @@
     "ttsRequestTimeoutSeconds": 15,
     "logMaxMegabytes": 5,
     "logKeepFiles": 3,
+    "hostedModel": "gpt-oss:120b",
+    "hostedBaseURL": "https://ollama.com",
     "cloudSpeechRecognition": "never",
     "retainConversationsDays": 30,
     "retainTraceDays": 30,

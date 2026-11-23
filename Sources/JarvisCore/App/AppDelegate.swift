@@ -29,6 +29,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         return Privacy.flows(PrivacySnapshot(
             transcriber: transcriber.name, transcriberUsesServer: transcriber.sendsAudioOffDevice, voiceEngine: voice.engineKind,
             claudeConfigured: KeychainStore.apiKey() != nil || SecretVault.shared.state == .locked || SecretVault.shared.state == .unlocking,
+            hostedModel: (brain?.hosted?.hasKey ?? false) && !(brain?.privateMode ?? false) ? brain?.hosted?.model : nil,
+            privateMode: brain?.privateMode ?? false,
             googleConnected: KeychainStore.read(account: GoogleAuth.refreshTokenAccount) != nil,
             notionConnected: KeychainStore.read(account: NotionClient.tokenAccount) != nil,
             spotifyConnected: KeychainStore.read(account: SpotifySearch.clientIDAccount) != nil,
@@ -255,6 +257,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         brain.memory = memory
         brain.skills = skills
         brain.local = local
+        // The second cloud brain. It costs nothing to have ready: without a key it is simply never used.
+        if let url = URL(string: config.tuning.hostedBaseURL), url.scheme == "https" {
+            brain.hosted = OllamaClient.hosted(baseURL: url, model: config.tuning.hostedModel)
+        }
         narrator = BriefingNarrator(client: brain.client, config: config, world: world)
         hud = HUDWindowController(model: notch, dismissAfter: config.profile.hud?.dismissAfterSeconds ?? 8,
                                   preferredDisplay: config.profile.hud?.preferredDisplay)

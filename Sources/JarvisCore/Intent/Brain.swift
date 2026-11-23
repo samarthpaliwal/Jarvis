@@ -32,6 +32,25 @@ public final class Brain: ObservableObject {
     public let session = SessionMemory()
     public var skills: SkillLibrary?
     public var local: OllamaClient?
+    /// A second cloud brain: a model hosted by Ollama (gpt-oss:120b). Nothing runs on this Mac for it.
+    public var hosted: OllamaClient?
+    /// Which brain answers: "claude" (default) or "hosted". The other one steps in when the chosen one cannot answer.
+    @Published public var engineChoice: String = UserDefaults.standard.string(forKey: "jarvis.brainEngine") ?? "claude" {
+        didSet { UserDefaults.standard.set(engineChoice, forKey: "jarvis.brainEngine") }
+    }
+
+    public enum Engine: String, Sendable { case claude, hosted, local }
+
+    /// Who answers this request, and who is the stand-in if that one fails.
+    /// Private Mode and offline always mean the local path: a hosted model is still someone else's computer.
+    nonisolated static func plan(choice: String, privateMode: Bool, online: Bool, claudeReady: Bool, hostedReady: Bool) -> (first: Engine, fallback: Engine?) {
+        if privateMode || !online { return (.local, nil) }
+        let wantsHosted = choice.lowercased() == "hosted"
+        if wantsHosted, hostedReady { return (.hosted, claudeReady ? .claude : nil) }
+        if claudeReady { return (.claude, hostedReady ? .hosted : nil) }
+        if hostedReady { return (.hosted, nil) }
+        return (.claude, nil)
+    }
     /// Private Mode: every turn goes to the local model, nothing to the cloud.
     @Published public var privateMode: Bool = UserDefaults.standard.bool(forKey: "jarvis.privateMode") {
         didSet { UserDefaults.standard.set(privateMode, forKey: "jarvis.privateMode") }
@@ -74,8 +93,22 @@ public final class Brain: ObservableObject {
 
     /// Streams the reply text through `onText` as it arrives; returns the full turn when done.
     public func respond(to userText: String, onText: @escaping (String) -> Void) async throws -> Turn {
+        let hostedReady = hosted?.hasKey ?? false
+        let plan = Self.plan(choice: engineChoice, privateMode: privateMode, online: isOnline,
+                             claudeReady: KeychainStore.apiKey() != nil, hostedReady: hostedReady)
+        if plan.first == .hosted, let hosted {
+            do { return try await respondHosted(userText, client: hosted, onText: onText) }
+            catch let error where plan.fallback == .claude && !(error is CancellationError) {
+                JarvisLog.warn("Hosted model failed (\(error.localizedDescription.prefix(160))); answering with Claude")
+            }
+        }
         do {
             return try await respondOnce(to: userText, onText: onText)
+        } catch let error where plan.first == .claude && plan.fallback == .hosted && Self.shouldFallBack(from: error) {
+            // Claude cannot answer right now (no key, out of budget, the service is down): the other brain does.
+            guard let hosted else { throw error }
+            JarvisLog.warn("Claude unavailable (\(error.localizedDescription.prefix(160))); answering with \(hosted.model)")
+            return try await respondHosted(userText, client: hosted, onText: onText)
         } catch BudgetError.dailyCapReached(let spent, let cap) {
             // Out of budget for today: answer on-device if a local model is there, otherwise say so.
             guard config.profile.local?.enabled ?? true, let local, await local.status().hasModel else {
@@ -337,14 +370,48 @@ public final class Brain: ObservableObject {
 
     // MARK: Local model (Ollama)
 
-    func respondLocally(_ userText: String, client: OllamaClient, onText: @escaping (String) -> Void) async throws -> Turn {
+    /// Errors after which the other brain should try: Claude is not reachable or not allowed to answer.
+    /// A refusal, a cancelled turn, or a request Claude rejected as malformed is not one of them.
+    nonisolated static func shouldFallBack(from error: Error) -> Bool {
+        if error is CancellationError { return false }
+        if error is BudgetError { return true }
+        if let e = error as? ClaudeClient.ClientError {
+            switch e {
+            case .noAPIKey: return true
+            case .http(let code, _): return code == 401 || code == 403 || code == 429 || code >= 500
+            default: return true
+            }
+        }
+        return error is URLError || error is TimeoutError
+    }
+
+    /// A turn answered by the hosted model: the same tools and safety checks as Claude, minus what only
+    /// Claude has (web search on Anthropic's side, and eyes: it cannot look at pictures).
+    func respondHosted(_ userText: String, client: OllamaClient, onText: @escaping (String) -> Void) async throws -> Turn {
+        var turn = try await respondLocally(userText, client: client, onText: onText, hosted: true)
+        turn.engine = "hosted"
+        turn.inputTokens = client.lastUsage.input
+        turn.outputTokens = client.lastUsage.output
+        if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
+        if !turn.text.isEmpty { session.note(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
+        return turn
+    }
+
+    /// Tools the hosted model does not get: they return pictures, which it cannot see.
+    static let hostedExcludedTools: Set<String> = ["look"]
+
+    func respondLocally(_ userText: String, client: OllamaClient, onText: @escaping (String) -> Void, hosted: Bool = false) async throws -> Turn {
         var turn = Turn()
         turn.engine = "local"
         let mode = modes.current
         var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
         if let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
-        stable += "\n\nYou are running on a local model on this Mac" + (privateMode ? " (Private Mode: nothing leaves the Mac)." : " because the internet is down.") +
-                  " Keep replies to one or two sentences. Only call a tool when needed."
+        if hosted {
+            stable += "\n\nYou have no web search and cannot see images in this session. If a request needs either, say so in one sentence."
+        } else {
+            stable += "\n\nYou are running on a local model on this Mac" + (privateMode ? " (Private Mode: nothing leaves the Mac)." : " because the internet is down.") +
+                      " Keep replies to one or two sentences. Only call a tool when needed."
+        }
         var messages: [JSONObject] = [["role": "system", "content": stable + "\n\n" + volatile]]
         // Carry over the last few plain-text exchanges from the cloud history.
         for m in history.suffix(6) {
@@ -354,11 +421,14 @@ public final class Brain: ObservableObject {
             if !text.isEmpty { messages.append(["role": role, "content": text]) }
         }
         messages.append(["role": "user", "content": userText])
-        let tools = OllamaClient.tools(from: dispatcher.definitions(for: mode).filter { Self.localToolNames.contains($0["name"] as? String ?? "") })
-        var guardian = LoopGuard(budget: config.tuning.localToolCallBudgetPerTurn)
-        for round in 0..<4 {
+        let tools = OllamaClient.tools(from: dispatcher.definitions(for: mode).filter {
+            let name = $0["name"] as? String ?? ""
+            return hosted ? !Self.hostedExcludedTools.contains(name) : Self.localToolNames.contains(name)
+        })
+        var guardian = LoopGuard(budget: hosted ? config.tuning.toolCallBudgetPerTurn : config.tuning.localToolCallBudgetPerTurn)
+        for round in 0..<(hosted ? maxToolRounds : 4) {
             let reply = try await client.chat(messages: messages, tools: tools, onText: { t in turn.text += t; onText(t) })
-            JarvisLog.info("Local round \(round): \(reply.text.count) chars, tools=\(reply.toolCalls.map(\.name))")
+            JarvisLog.info("\(hosted ? "Hosted (\(client.model))" : "Local") round \(round): \(reply.text.count) chars, tools=\(reply.toolCalls.map(\.name))")
             guard !reply.toolCalls.isEmpty else { break }
             messages.append(["role": "assistant", "content": reply.text,
                              "tool_calls": reply.toolCalls.map { ["function": ["name": $0.name, "arguments": $0.arguments]] }])

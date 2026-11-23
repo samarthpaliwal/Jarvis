@@ -14,7 +14,7 @@ import re, subprocess, sys
 STAGES = [
     ("wake",     "1 Wake word",          "WakeWordTests WakeConfigTests PhraseSpotterTests AudioRecoveryTests"),
     ("stt",      "2 Speech to text",     "EndpointerTests EchoGuardTests AudioCodecTests"),
-    ("intent",   "3 Intent (Claude)",    "IntentStageTests ClaudeClientTests SSEParsingTests HistoryRepairTests AgenticChainTests OllamaShapeTests WebSearchTests SessionMemoryTests MemoryStoreTests LoopGuardTests BudgetTests RetryTests SkillLibraryTests"),
+    ("intent",   "3 Intent (Claude)",    "IntentStageTests ClaudeClientTests SSEParsingTests HistoryRepairTests AgenticChainTests OllamaShapeTests WebSearchTests SessionMemoryTests MemoryStoreTests LoopGuardTests BudgetTests RetryTests SkillLibraryTests HostedBrainTests"),
     ("actions",  "4 Actions (tools)",    "DispatcherTests DenylistGuardTests SecretRedactorTests InjectionScannerTests ToolTimeoutTests DeadlineTests CalendarToolsTests CalendarMatcherTests CameraToolTests CameraFilesTests VisionTests LiveToolTests MusicTests ScreenTests ContactBookTests OrganizePlannerTests NotionParsingTests GmailParsingTests DateParsingTests BriefingLogicTests LoopbackListenerTests"),
     ("tts",      "5 Text to speech",     "SentenceChunkerTests SpeechQueueTests SpeechOutputTests VoicePickerTests KokoroTests VoiceTests"),
     ("pipeline", "Pipeline end to end",  "PipelineMachineTests PipelineStagesTests PipelineFailureTests SpokenFailureTests ConversationFlowTests LatencyTests TraceTests BudgetPipelineTests"),
