@@ -135,6 +135,11 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         }
         hudItem.state = hud.fullScreenAlways ? .on : .off
         menu.addItem(hudItem)
+        let stayItem = ClosureMenuItem(title: "Keep HUD On Screen Until I Click It", symbol: "pin") { [hud] in
+            hud.stayOn.toggle()
+        }
+        stayItem.state = hud.stayOn ? .on : .off
+        menu.addItem(stayItem)
         menu.addItem(ClosureMenuItem(title: "Show HUD Now", symbol: "sparkles.rectangle.stack") { [hud] in hud.show(scene: false) })
         let displays = NSScreen.screens.map(\.localizedName)
         let target = NotchGeometry.screen(named: hud.preferredDisplay)?.localizedName ?? NotchGeometry.preferredScreen()?.localizedName ?? "?"

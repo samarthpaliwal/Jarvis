@@ -20,6 +20,16 @@ public final class HUDWindowController: ObservableObject {
     private var keyMonitor: Any?
     private var dismissTask: Task<Void, Never>?
     private var pinnedForScene = false
+    /// Bumped by every show and dismiss, so a fade-out that a new show overtook does not hide the panel.
+    private var generation = 0
+    /// Keep the HUD up after a conversation ends, until a click or Esc (menu toggle).
+    @Published public var stayOn: Bool = UserDefaults.standard.bool(forKey: "jarvis.hudStayOn") {
+        didSet {
+            UserDefaults.standard.set(stayOn, forKey: "jarvis.hudStayOn")
+            if !stayOn, isShowing, model.phase == .idle { scheduleDismiss() }
+            if stayOn { dismissTask?.cancel() }
+        }
+    }
     private var dismissAfter: TimeInterval = 8
     /// Display name the HUD should use when connected (e.g. "Odyssey G5"); nil = the notch screen.
     public var preferredDisplay: String?
@@ -61,9 +71,12 @@ public final class HUDWindowController: ObservableObject {
     public func show(scene: Bool) {
         pinnedForScene = scene || pinnedForScene
         guard let screen = ScreenResolver.target(pinned: preferredDisplay) else { return }
+        generation += 1
+        dismissTask?.cancel()
         if hosting == nil { rebuild() }
         panel.setFrame(screen.frame, display: true)
-        panel.alphaValue = 0
+        // Already visible (or fading out): fade back up from where it is, never blink to black.
+        if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
         isShowing = true
         NSAnimationContext.runAnimationGroup { ctx in
@@ -85,12 +98,12 @@ public final class HUDWindowController: ObservableObject {
     }
 
     private func scheduleDismiss() {
-        guard !pinnedForScene else { return }
+        guard !pinnedForScene, !stayOn else { return }
         dismissTask?.cancel()
         dismissTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: .seconds(self.dismissAfter))
-            guard !Task.isCancelled, self.model.phase == .idle else { return }
+            guard !Task.isCancelled, self.model.phase == .idle, !self.stayOn else { return }
             self.dismiss(reason: "idle")
         }
     }
@@ -99,14 +112,18 @@ public final class HUDWindowController: ObservableObject {
         guard isShowing else { return }
         dismissTask?.cancel()
         pinnedForScene = false
+        // Hidden as far as the rest of the app is concerned from this moment: a conversation that
+        // starts during the fade must be able to bring the HUD straight back.
+        isShowing = false
+        generation += 1
+        let mine = generation
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = model.reduceMotion ? 0.15 : 0.4
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.generation == mine else { return }
                 self.panel.orderOut(nil)
-                self.isShowing = false
                 // Tear down the view tree: a hidden TimelineView keeps animating and burns CPU.
                 self.panel.contentView = nil
                 self.hosting = nil
