@@ -5,7 +5,7 @@ import Combine
 /// Also barge-in and Tier 2 approvals (buttons or voice).
 @MainActor
 public final class ConversationController: ObservableObject {
-    public enum State: String, Equatable { case idle, listening, thinking, speaking, awaitingApproval }
+    public typealias State = PipelineState
 
     public struct TurnStats: Equatable {
         public var wakeToFirstWordMs: Double?
@@ -63,6 +63,30 @@ public final class ConversationController: ObservableObject {
     private var replyTask: Task<Void, Never>?
     /// The request being worked on (nil when idle). One at a time.
     public private(set) var trace: RequestTrace?
+    /// Transitions the table did not allow. Zero in a healthy run; shown in the menu and checked by tests.
+    public private(set) var illegalTransitions = 0
+    /// Strict mode refuses an illegal transition. Off in the app for now: an unexpected transition is
+    /// logged and still applied, so the table can prove itself against real use without ever hanging a turn.
+    public var strictTransitions = false
+
+    /// The only place `state` changes.
+    @discardableResult
+    private func transition(_ event: PipelineEvent) -> Bool {
+        let from = state
+        guard let to = PipelineMachine.next(from, on: event) else {
+            illegalTransitions += 1
+            JarvisLog.warn("Illegal transition: \(event.rawValue) while \(from.rawValue)" + (strictTransitions ? " (refused)" : " (applied anyway)"), request: trace?.id)
+            TraceSink.shared.write(["event": "illegal_transition", "on": event.rawValue, "from": from.rawValue,
+                                    "request": trace?.id ?? "-", "applied": !strictTransitions])
+            guard !strictTransitions else { return false }
+            state = event.target
+            return true
+        }
+        guard to != from else { return true }
+        state = to
+        TraceSink.shared.write(["event": "state", "from": from.rawValue, "to": to.rawValue, "on": event.rawValue, "request": trace?.id ?? "-"])
+        return true
+    }
 
     // Approval
     private var pendingApproval: (request: ApprovalRequest, continuation: CheckedContinuation<Bool, Never>)?
@@ -134,7 +158,7 @@ public final class ConversationController: ObservableObject {
         if let p = pendingApproval { pendingApproval = nil; p.continuation.resume(returning: false) }
         wake.setPaused(false)
         onTurnActive?(false)
-        state = .idle
+        transition(.stopped)
         notch.collapse()
     }
 
@@ -152,7 +176,7 @@ public final class ConversationController: ObservableObject {
         if followUp { settings.noSpeechTimeout = max(2, config.profile.speech?.followUpSeconds ?? 7) }
         endpointer = Endpointer(settings: settings)
         lastTurn = TurnStats()
-        state = .listening
+        transition(seed != nil ? .bargeIn : followUp ? .followUp : .wake)
         notch.isFollowUp = followUp
         notch.listen()
         if let seed { _ = endpointer.update(TranscriptUpdate(text: seed, isFinal: false)); notch.transcript = seed }
@@ -246,7 +270,7 @@ public final class ConversationController: ObservableObject {
         endpointTimer?.cancel()
         transcriber.cancel()
         wake.setPaused(false)
-        state = .idle
+        transition(.sttFailed)
         let msg: String
         if case TranscriberError.notAuthorized = error {
             msg = "I need Speech Recognition permission. System Settings → Privacy & Security → Speech Recognition."
@@ -270,7 +294,7 @@ public final class ConversationController: ObservableObject {
         onTurnActive?(false)
         guard !text.isEmpty else {
             trace?.finish(outcome: "no_speech")
-            state = .idle
+            transition(.noSpeech)
             notch.isFollowUp = false
             notch.collapse()
             return
@@ -284,7 +308,7 @@ public final class ConversationController: ObservableObject {
             trace?.event(.transcribed, "echo_discarded", ["overlap": sim.overlap, "ordered": sim.ordered, "chars": text.count])
             trace?.finish(outcome: "echo_discarded")
             transcriber.cancel()
-            state = .idle
+            transition(.echoDiscarded)
             notch.isFollowUp = false
             notch.collapse()
             return
@@ -294,13 +318,13 @@ public final class ConversationController: ObservableObject {
             JarvisLog.info("Conversation ended by “\(text)”", request: trace?.id)
             trace?.finish(outcome: "ended_by_user")
             transcriber.cancel()
-            state = .idle
+            transition(.conversationEnded)
             notch.isFollowUp = false
             notch.collapse()
             return
         }
         lastUserText = text
-        state = .thinking
+        transition(.transcribed)
         notch.think()
         replyTask?.cancel()
         let request = trace
@@ -340,7 +364,7 @@ public final class ConversationController: ObservableObject {
         speechEndedAt = Date()
         let request = beginRequest(source: "text")
         request.event(.transcribed, "speech_end", ["reason": "typed", "chars": text.count])
-        state = .thinking
+        transition(.typed)
         notch.think()
         replyTask?.cancel()
         replyTask = Task { [weak self] in
@@ -371,7 +395,7 @@ public final class ConversationController: ObservableObject {
                     RequestTrace.current?.event(.intent, "first_token")
                     JarvisLog.info(String(format: "End of speech → first reply token %.0f ms", ms))
                 }
-                if self.state == .thinking { self.state = voiceOn ? .speaking : .thinking; if voiceOn { self.listenForStop() } }
+                if self.state == .thinking, voiceOn { self.transition(.replyStarted); self.listenForStop() }
                 self.notch.appendReply(delta)
                 self.currentReply += delta
                 self.notch.cancelCollapse()
@@ -420,13 +444,13 @@ public final class ConversationController: ObservableObject {
         guard voiceOn else {
             request?.event(.spoken, "shown", ["voice": false])
             request?.finish(outcome: failed ? "error" : "shown")
-            state = .idle
+            transition(.replyFinished)
             notch.scheduleCollapse(after: 10)
             return
         }
         if let rest = chunker.flush() { spokeSomething = true; speech.enqueue(rest, volume: volume, rate: rate) }
         if !spokeSomething { speech.enqueue(turn.text.isEmpty ? "Done." : turn.text, volume: volume, rate: rate) }
-        state = .speaking
+        transition(.replyStarted)
         listenForStop()
         speech.whenQueueDrained { [weak self] completed in
             guard let self else { return }
@@ -435,7 +459,7 @@ public final class ConversationController: ObservableObject {
             self.transcriber.cancel()
             self.lastSpokeAt = Date()
             if self.state == .speaking {
-                self.state = .idle
+                self.transition(.replyFinished)
                 if completed, self.conversationMode, (self.config.profile.speech?.followUpSeconds ?? 7) > 0 {
                     // Let the speakers and the room go quiet before the microphone counts as "the user".
                     let after = self.turn
@@ -472,14 +496,14 @@ public final class ConversationController: ObservableObject {
         notch.respond(text, cards: cards, collapseAfter: voiceOn ? 60 : 8)
         guard voiceOn, state == .idle else { onDone?(); return }
         currentReply = text   // so the cut-in listener can tell this announcement from the user
-        state = .speaking
+        transition(.announce)
         listenForStop()
         speech.speak(text, volume: Float(mode.voice.volume), rate: Float(config.profile.assistant.speechRate)) { [weak self] completed in
             guard let self else { return }
             self.transcriber.cancel()
             self.lastSpokeAt = Date()
             if self.state == .speaking {
-                self.state = .idle
+                self.transition(.replyFinished)
                 self.notch.scheduleCollapse(after: completed ? 2.5 : 0.5)
             }
             onDone?()
@@ -506,7 +530,7 @@ public final class ConversationController: ObservableObject {
         if let p = pendingApproval { pendingApproval = nil; p.continuation.resume(returning: false) }
         return await withCheckedContinuation { cont in
             pendingApproval = (request, cont)
-            state = .awaitingApproval
+            transition(.approvalNeeded)
             listeningForStopOnly = false
             notch.cancelCollapse()
             if notch.phase != .responding { notch.respond("", cards: [], collapseAfter: 120) }
@@ -571,7 +595,7 @@ public final class ConversationController: ObservableObject {
         wake.setPaused(false)
         notch.removeCard(id: "approval-\(id)")
         JarvisLog.info("Approval \(approved ? "GRANTED" : "DENIED") via \(reason): \(p.request.preview)")
-        state = .thinking
+        transition(.approvalResolved)
         p.continuation.resume(returning: approved)
     }
 
