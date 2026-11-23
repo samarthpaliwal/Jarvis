@@ -578,8 +578,9 @@ and going. Connections from addresses outside the tailnet range are dropped befo
 is no setting that makes it listen on every address (`remoteBind` accepts `tailscale` or `loopback`; anything
 else means `tailscale`).
 
-**The token.** Every request needs `Authorization: Bearer <token>`. Without a valid one the answer is
-`401` for every path, whether or not the path exists, and the request body is not read. Five wrong tokens
+**The token.** Every request to the pipeline needs `Authorization: Bearer <token>`. Without a valid one the
+answer is `401` for every path except the phone app's own static files, whether or not the path exists,
+and the request body is not read. Five wrong tokens
 in a minute from one device lock that device out for five minutes. Jarvis stores only a SHA-256 of each
 token (`~/Library/Application Support/Jarvis/remote/tokens.json`, owner-only, on the tool denylist), so the
 file does not let anyone in. Each device gets its own token; revoke one in the menu and it stops working
@@ -589,6 +590,8 @@ at once. Revoking the last one closes the port.
 
 | | | |
 |---|---|---|
+| `GET /` | | The phone app (static files, no token). |
+| `POST /v1/pair` | `{"code": "123456"}` | Trades the code on the Mac's screen for a token. Exists only while a code is showing. |
 | `GET /v1/status` | | Is Jarvis there, is it busy, are the keys unlocked, is Voice ID set up. |
 | `POST /v1/ask` | a recording (WAV or M4A, up to 60 s), or `{"text": "…"}` | Runs the request. |
 | `POST /v1/approve?id=…` | a recording of "yes" or "no", or `{"id": "…", "decision": "yes"}` | Answers an approval. |
@@ -633,11 +636,66 @@ Add `?audio=0` (or `"audio": false`) to get text only. `409` means Jarvis is bus
 - After a restart the saved keys are locked until Touch ID (see *Keys*). A remote request then gets a
   reply saying so. If you want Jarvis to recover unattended, turn off *Keys → Require Touch ID to Unlock*.
 
+### Step 3: the phone app
+
+A web app with one big mic button, served by Jarvis itself: open the Mac's address in the phone's browser,
+pair once, and optionally *Share → Add to Home Screen* to keep it as an app. No App Store, nothing hosted
+anywhere else, no third-party scripts.
+
+- **Tap** the mic, talk, and it stops by itself when you pause (or tap again). The reply is shown and spoken.
+- **Type** in the field under the button instead, any time.
+- **Approvals** appear as a card with the exact action and *Yes, do it* / *No*; you can also tap the mic
+  and say yes or no. The rules above still apply: without a verified voice there is no card, only a refusal.
+- ••• opens settings: turn spoken replies off, or forget the pairing on this device.
+
+**Pairing.** Jarvis menu → *Remote Access* → *Pair a Phone…*, name the phone. The Mac shows a six-digit
+code for two minutes and the address to open. Type the code in the app; the phone gets its own token
+(listed in the menu, revocable there) and the Mac flashes a notice, so a pairing never happens unnoticed.
+A code works once; five wrong guesses cancel it. Outside those two minutes the pairing route does not
+exist. The app's own files (a page, a script, a stylesheet, icons) are the only thing served without a
+token; they are the same for everyone and hold no data.
+
+**The microphone needs HTTPS.** Browsers only allow the microphone on `https://` pages. Over plain
+`http://100.x.y.z:8787` the app works for typing, and says so. For the mic, let Tailscale put HTTPS in front:
+
+1. In the [Tailscale admin console](https://console.tailscale.com/admin/dns) → DNS: enable *MagicDNS*, then
+   under *HTTPS Certificates* choose *Enable HTTPS*.
+   **Know before you click:** certificates are recorded in public transparency logs, so this Mac's name and
+   your tailnet's name (`sams-macbook.tail1234.ts.net`) become publicly visible. Only the names: nothing
+   becomes reachable from the internet. If the Mac's name says more than you like, rename it in the admin
+   console first.
+2. Tell Jarvis to listen on this Mac only, so that Tailscale is the one thing facing the tailnet. Add to
+   `~/Library/Application Support/Jarvis/jarvis.env`, then restart Jarvis:
+
+   ```
+   JARVIS_REMOTE_BIND=loopback
+   ```
+
+3. Publish it to your tailnet (not the internet: that would be Funnel, which Jarvis never uses):
+
+   ```bash
+   tailscale serve --bg 8787
+   ```
+
+   It prints `Available within your tailnet: https://<mac>.<tailnet>.ts.net`. `tailscale serve status`
+   shows it, `tailscale serve reset` turns it off. (If your version does not know `--bg`, see
+   `tailscale serve --help`.)
+4. On the phone, with Tailscale on, open that `https://` address and pair.
+
+In this mode every request reaches Jarvis from `127.0.0.1`, so any program on the Mac can connect to the
+port too (it still needs a token), and the wrong-token lockout is shared by all devices.
+
+**What has and has not been tried.** In a desktop browser at phone size, against the running app:
+pairing with a code, a typed request and its reply, decoding the spoken reply, and uploading audio made by
+the page's recorder. The recorder's resampling and WAV encoding are tested under Node against the Mac's
+decoder. Not yet tried: a real phone, the microphone in a browser, Add to Home Screen, and the service
+worker (the test browser does not run service workers).
+
 **Check it**
 
 ```bash
 scripts/tailscale-check.sh      # “remote API is listening on 100.x.y.z:8787 and refuses requests without a token”
-swift test --filter "Remote|HTTP|AudioCodec|Tailnet"   # API, tokens, server, audio, remote approval rules
+swift test --filter "Remote|HTTP|AudioCodec|Tailnet|WebApp|Pairing"   # API, tokens, server, audio, approvals, the phone app
 ```
 
 Settings (`profile.json → tuning`, or `JARVIS_…` in `jarvis.env`): `remotePort` 8787, `remoteBind`
@@ -1101,6 +1159,8 @@ Unit tests write to a temporary folder, never to these files.
   only, with a per-device token on every request. Off by default. A remote request runs the same stages as
   a spoken one and returns text and audio; nothing is shown or said on the Mac.
 - **Remote approvals need a verified voice.** No Voice ID, a typed request, or someone else's voice: refused.
+- **Phone app:** one mic button, served by Jarvis, installable from the browser. Pairs with a six-digit code
+  shown on the Mac. The microphone needs HTTPS, which `tailscale serve` provides (see the README step).
 - A copy of Jarvis opened by hand now hands over to the launchd supervisor.
 
 ### 0.12.1 — Touch ID for the saved keys (2026-11-23)

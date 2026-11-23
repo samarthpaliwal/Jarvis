@@ -286,6 +286,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             toggle.state = remote.isEnabled ? .on : .off
             sub.addItem(toggle)
             sub.addItem(.separator())
+            sub.addItem(ClosureMenuItem(title: "Pair a Phone…", symbol: "iphone") { [weak self] in self?.pairPhone(remote) })
             sub.addItem(ClosureMenuItem(title: "Create Access Token…", symbol: "key") { [weak self] in self?.createRemoteToken(remote) })
             let tokens = remote.tokens.all
             if !tokens.isEmpty {
@@ -730,6 +731,52 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
 
 /// NSMenuItem that runs a closure. Keeps the menu code free of selector plumbing.
 extension MenuBarController {
+    /// Shows a six-digit code for the phone app to type. Turns remote access on if it was off.
+    func pairPhone(_ remote: RemoteAccess) {
+        let ask = NSAlert()
+        ask.messageText = "Pair a phone"
+        ask.informativeText = "What should this phone be called?" + (remote.isEnabled ? "" : " This also turns on remote access over Tailscale.")
+        ask.addButton(withTitle: "Show Code"); ask.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = "iPhone"
+        ask.accessoryView = field
+        ask.window.initialFirstResponder = field
+        guard ask.runFocusedModal() == .alertFirstButtonReturn else { return }
+        if !remote.isEnabled { remote.isEnabled = true }
+        let offer: PairingCodes.Offer
+        do { offer = try remote.beginPairing(name: field.stringValue) }
+        catch {
+            let failed = NSAlert()
+            failed.messageText = "Pairing did not start"
+            failed.informativeText = error.localizedDescription
+            _ = failed.runFocusedModal()
+            return
+        }
+        Task { @MainActor in
+            let name = await Task.detached { Tailnet.dnsName() }.value
+            try? await Task.sleep(for: .milliseconds(300))      // let the listener come up so the address is known
+            var lines: [String] = []
+            switch remote.state {
+            case .listening(let host, let port) where Tailnet.isLoopback(host):
+                lines.append("On the phone, with Tailscale on, open:\n\(name.map { "https://\($0)" } ?? "https://<this Mac's Tailscale name>")")
+                lines.append("(Jarvis is listening on this Mac only, port \(port); `tailscale serve --bg \(port)` publishes it to your tailnet over HTTPS.)")
+            case .listening(let host, let port):
+                lines.append("On the phone, with Tailscale on, open:\nhttp://\(host):\(port)")
+                lines.append("Typing works at that address. The microphone needs HTTPS: see “Step 3” under Remote access in the README.")
+            case .waitingForTailscale:
+                lines.append("Tailscale is not connected on this Mac, so the phone cannot reach it yet. Turn Tailscale on and pair again.")
+            default:
+                lines.append(remote.state.line)
+            }
+            lines.append("Then type this code. It works once and expires in two minutes.")
+            let show = NSAlert()
+            show.messageText = "\(offer.code.prefix(3)) \(offer.code.suffix(3))"
+            show.informativeText = lines.joined(separator: "\n\n")
+            show.addButton(withTitle: "Done"); show.addButton(withTitle: "Cancel Pairing")
+            if show.runFocusedModal() == .alertSecondButtonReturn { remote.cancelPairing() }
+        }
+    }
+
     /// Asks which device the token is for, makes it, and shows it once.
     func createRemoteToken(_ remote: RemoteAccess) {
         let ask = NSAlert()

@@ -28,7 +28,7 @@ let package = Package(
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
             ],
             path: "Sources/JarvisCore",
-            resources: [.copy("Resources/Models")]
+            resources: [.copy("Resources/Models"), .copy("Resources/WebApp")]
         ),
         .executableTarget(
             name: "Jarvis",

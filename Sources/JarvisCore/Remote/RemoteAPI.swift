@@ -28,29 +28,47 @@ public protocol RemoteBackend: Sendable {
 
 /// The remote API: three routes, a token on every one.
 ///
+///     GET  /                              the phone app (static files; the only thing served without a token)
+///     POST /v1/pair     {"code": "…"}     trade the six-digit code on the Mac's screen for a token
 ///     GET  /v1/status                     is Jarvis there, busy, unlocked
 ///     POST /v1/ask      audio | JSON      a request: a recording, or {"text": "…"}
 ///     POST /v1/approve  audio | JSON      the answer to an approval: a spoken yes/no, or {"id": "…", "decision": "yes"}
 ///
-/// Every request needs `Authorization: Bearer <token>`. Without a valid one the answer is 401 and nothing
-/// else, for every path, so an unauthenticated caller learns nothing about what exists.
+/// Every request that reaches the pipeline needs `Authorization: Bearer <token>`. Without a valid one the
+/// answer is 401 for every other path, whether or not it exists.
 public final class RemoteAPI: @unchecked Sendable {
     private let tokens: RemoteTokenStore
     private let throttle: AuthThrottle
     private let backend: RemoteBackend
     private let maxAudioSeconds: @Sendable () -> Double
+    public let pairing: PairingCodes
+    /// Called when a device has just paired, with its name.
+    public var onPaired: (@Sendable (String) -> Void)?
     public static let maxTextLength = 2000
 
     public init(tokens: RemoteTokenStore, throttle: AuthThrottle = AuthThrottle(), backend: RemoteBackend,
-                maxAudioSeconds: @escaping @Sendable () -> Double = { 60 }) {
-        self.tokens = tokens; self.throttle = throttle; self.backend = backend; self.maxAudioSeconds = maxAudioSeconds
+                pairing: PairingCodes = PairingCodes(), maxAudioSeconds: @escaping @Sendable () -> Double = { 60 }) {
+        self.tokens = tokens; self.throttle = throttle; self.backend = backend; self.pairing = pairing; self.maxAudioSeconds = maxAudioSeconds
     }
+
+    /// The two things reachable without a token: the phone app's own static files, and redeeming a pairing
+    /// code while the Mac is showing one.
+    private static let unauthorized = HTTPResponse.error(401, "unauthorized", "A valid access token is required.", headers: ["WWW-Authenticate": "Bearer"])
+    private func isShell(_ r: HTTPRequest) -> Bool { r.method == "GET" && WebApp.isShellPath(r.path) }
+    private func isPairing(_ r: HTTPRequest) -> Bool { r.method == "POST" && r.path == "/v1/pair" }
 
     // MARK: Authentication (runs on the headers, before any body is read)
 
     public func precheck(_ head: HTTPRequest, from ip: String) -> HTTPResponse? {
+        if isShell(head) { return nil }
         if let wait = throttle.retryAfter(ip) {
             return .error(429, "too_many_attempts", "Too many wrong tokens from this device. Try again later.", headers: ["Retry-After": String(wait)])
+        }
+        if isPairing(head) {
+            // Outside the two minutes a code is on the Mac's screen, this route does not exist.
+            guard pairing.isActive() else { return Self.unauthorized }
+            guard (Int(head.headers["content-length"] ?? "") ?? 0) <= 1024 else { return .error(413, "too_large", "That is not a pairing code.") }
+            return nil
         }
         guard let presented = head.bearerToken, tokens.verify(presented) != nil else {
             if throttle.recordFailure(ip) {
@@ -67,6 +85,8 @@ public final class RemoteAPI: @unchecked Sendable {
     // MARK: Routes
 
     public func handle(_ request: HTTPRequest, from ip: String) async -> HTTPResponse {
+        if isShell(request) { return WebApp.response(for: request.path) ?? .error(404, "not_found", "The app's files are missing from this build.") }
+        if isPairing(request) { return pair(request, from: ip) }
         // Never rely on the precheck having run: no token, no answer.
         guard let presented = request.bearerToken, let device = tokens.verify(presented) else {
             return .error(401, "unauthorized", "A valid access token is required.", headers: ["WWW-Authenticate": "Bearer"])
@@ -82,6 +102,24 @@ public final class RemoteAPI: @unchecked Sendable {
         }
         JarvisLog.info("Remote: \(request.method) \(request.path.prefix(40)) from \(ip) (\(device.name)) → \(response.status) in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
         return response
+    }
+
+    private func pair(_ request: HTTPRequest, from ip: String) -> HTTPResponse {
+        if throttle.retryAfter(ip) != nil { return .error(429, "too_many_attempts", "Too many attempts from this device. Try again later.") }
+        let code = ((try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any])?["code"] as? String ?? ""
+        guard request.body.count <= 1024, let name = pairing.redeem(code) else {
+            throttle.recordFailure(ip)
+            JarvisLog.warn("Remote: wrong or expired pairing code from \(ip)")
+            return Self.unauthorized
+        }
+        // The name was free when the code was shown; if something took it since, number this one.
+        var token: String?
+        for candidate in [name] + (2...9).map({ "\(name) \($0)" }) {
+            if let t = try? tokens.create(name: candidate) { token = t; JarvisLog.info("Remote: paired “\(candidate)” from \(ip)"); onPaired?(candidate); break }
+        }
+        guard let token else { return .error(500, "pairing_failed", "Pairing failed. Try again from the Mac.") }
+        throttle.recordSuccess(ip)
+        return .json(200, ["token": token, "device": name])
     }
 
     private func status(device: RemoteToken) async -> HTTPResponse {

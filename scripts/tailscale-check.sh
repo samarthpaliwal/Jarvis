@@ -74,7 +74,16 @@ if [ -n "$IP" ]; then
   CODE="$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://$IP:$PORT/v1/status" 2>/dev/null || true)"
   case "$CODE" in
     401) ok "remote API is listening on $IP:$PORT and refuses requests without a token" ;;
-    000|"") note "remote API is not listening on $IP:$PORT (it is off until you turn it on: Jarvis menu → Remote Access)" ;;
+    000|"")
+      LOCAL="$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://127.0.0.1:$PORT/v1/status" 2>/dev/null || true)"
+      if [ "$LOCAL" = "401" ]; then
+        ok "remote API is listening on this Mac only (127.0.0.1:$PORT) and refuses requests without a token"
+        SERVE="$([ ${#TS[@]} -gt 0 ] && "${TS[@]}" serve status 2>/dev/null || true)"
+        if printf '%s' "$SERVE" | grep -q "$PORT"; then ok "tailscale serve publishes it to your tailnet over HTTPS"; printf '%s\n' "$SERVE" | sed 's/^/      /' | head -6
+        else note "nothing publishes it to the tailnet yet: tailscale serve --bg $PORT"; fi
+      else
+        note "remote API is not listening (it is off until you turn it on: Jarvis menu → Remote Access)"
+      fi ;;
     *) bad "remote API answered $CODE to a request without a token; it should answer 401" ;;
   esac
   # It must not answer on the ordinary network address.

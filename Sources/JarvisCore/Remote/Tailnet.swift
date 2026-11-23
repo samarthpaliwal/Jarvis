@@ -57,4 +57,37 @@ public enum Tailnet {
 
     /// This Mac's Tailscale address right now, or nil when Tailscale is off or not installed.
     public static var current: Address? { pick(from: interfaceAddresses()) }
+
+    /// The `tailscale` command, wherever this install keeps it.
+    static func cli() -> (path: String, environment: [String: String])? {
+        let fm = FileManager.default
+        for path in ["/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale"] where fm.isExecutableFile(atPath: path) { return (path, [:]) }
+        let app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        return fm.isExecutableFile(atPath: app) ? (app, ["TAILSCALE_BE_CLI": "1"]) : nil
+    }
+
+    /// The name out of `tailscale status --json`.
+    static func dnsName(fromStatusJSON data: Data) -> String? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let me = root["Self"] as? [String: Any],
+              let raw = me["DNSName"] as? String else { return nil }
+        let name = raw.hasSuffix(".") ? String(raw.dropLast()) : raw
+        return name.isEmpty ? nil : name
+    }
+
+    /// This Mac's name on the tailnet (`macbook.tail1234.ts.net`), or nil when it cannot be found out.
+    /// Asks the Tailscale command-line tool; blocks for up to three seconds, so not for the main thread.
+    public static func dnsName() -> String? {
+        guard let cli = cli() else { return nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: cli.path)
+        p.arguments = ["status", "--json"]
+        p.environment = ProcessInfo.processInfo.environment.merging(cli.environment) { _, new in new }
+        let out = Pipe()
+        p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { if p.isRunning { p.terminate() } }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return dnsName(fromStatusJSON: data)
+    }
 }

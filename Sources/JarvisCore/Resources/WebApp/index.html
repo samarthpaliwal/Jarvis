@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Jarvis</title>
+<meta name="theme-color" content="#0b0d12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main id="app" data-state="loading">
+  <header>
+    <span id="dot" class="dot" aria-hidden="true"></span>
+    <span id="status">Connecting…</span>
+    <button id="menu" class="quiet" aria-label="Settings">•••</button>
+  </header>
+
+  <section id="pair" hidden>
+    <h1>Pair with your Mac</h1>
+    <p>On the Mac: Jarvis menu → Remote Access → Pair a Phone. Type the six-digit code it shows.</p>
+    <form id="pair-form" autocomplete="off">
+      <input id="pair-code" inputmode="numeric" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="123456" aria-label="Pairing code">
+      <button type="submit">Pair</button>
+    </form>
+    <p id="pair-error" class="error" role="alert"></p>
+  </section>
+
+  <section id="talk" hidden>
+    <div id="log" aria-live="polite">
+      <p id="heard" class="heard"></p>
+      <p id="reply" class="reply"></p>
+    </div>
+    <div id="approval" class="card" hidden>
+      <p class="label">Needs your approval</p>
+      <p id="approval-text"></p>
+      <div class="row">
+        <button id="deny" class="secondary">No</button>
+        <button id="approve">Yes, do it</button>
+      </div>
+    </div>
+    <button id="mic" aria-label="Talk to Jarvis">
+      <span id="ring" aria-hidden="true"></span>
+      <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true"><path fill="currentColor" d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-6a3.5 3.5 0 0 0-7 0v6A3.5 3.5 0 0 0 12 15Zm6-3.5a1 1 0 1 1 2 0 8 8 0 0 1-7 7.94V22a1 1 0 1 1-2 0v-2.56a8 8 0 0 1-7-7.94 1 1 0 1 1 2 0 6 6 0 0 0 12 0Z"/></svg>
+    </button>
+    <p id="hint">Tap to talk</p>
+    <form id="type-form" autocomplete="off">
+      <input id="type-text" enterkeyhint="send" placeholder="or type a request" aria-label="Type a request">
+    </form>
+  </section>
+
+  <dialog id="sheet">
+    <p id="device-line"></p>
+    <p id="install-line" class="muted"></p>
+    <label class="check"><input type="checkbox" id="speak-toggle" checked> Speak replies</label>
+    <div class="row">
+      <button id="forget" class="secondary">Forget this device</button>
+      <button id="close-sheet">Done</button>
+    </div>
+  </dialog>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

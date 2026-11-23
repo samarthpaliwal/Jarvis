@@ -247,6 +247,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         remote = RemoteAccess(config: config, tokens: RemoteTokenStore(),
                               backend: LiveRemoteBackend(conversation: conversation, config: config, modes: modes, router: voice, voiceID: voiceID,
                                                          makeTranscriber: { TranscriberFactory.make(locale: speechLocale) }))
+        remote.onPaired = { [weak self] name in self?.notch?.flash("Paired “\(name)” for remote access", seconds: 8) }
         remote.start()
         // A frozen main thread is not a crash, so launchd would never notice. This does.
         let supervised = supervisedByLaunchd
@@ -364,6 +365,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!prewarm" { self.brain.prewarmIfCold(force: true); return }   // silent: no HUD, no speech
                                             if q.hasPrefix("!camera") { self.cameraDebug(q); return }               // drives the camera without a model turn
                                             if q == "!voiceid enroll" { self.startVoiceEnrollment(); return }
+                                            if q == "!remote pair" {        // testing: a pairing code, left in the (tool-denylisted) remote folder instead of on screen
+                                                let file = RemoteTokenStore.defaultURL.deletingLastPathComponent().appendingPathComponent("pairing-debug.txt")
+                                                if let offer = try? self.remote.beginPairing(name: "debug phone") {
+                                                    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                                                    try? Data(offer.code.utf8).write(to: file, options: .atomic)
+                                                    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                                                }
+                                                return
+                                            }
                                             if q.hasPrefix("!remote") {      // loopback: listen on 127.0.0.1 for this run only (testing); off: back to the settings
                                                 self.remote.bindOverride = q.hasSuffix("loopback") ? "loopback" : nil
                                                 JarvisLog.info("Debug: remote access is \(self.remote.state.line)")

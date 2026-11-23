@@ -233,7 +233,8 @@ final class RemoteAPITests: XCTestCase {
     var speech: Data { AudioCodec.wav(AudioCodecTests.tone(seconds: 1)) }
 
     func testEveryPathNeedsAToken() async {
-        for (method, path) in [("GET", "/v1/status"), ("POST", "/v1/ask"), ("POST", "/v1/approve"), ("GET", "/"), ("GET", "/nothing/here"), ("DELETE", "/v1/ask")] {
+        for (method, path) in [("GET", "/v1/status"), ("POST", "/v1/ask"), ("POST", "/v1/approve"), ("POST", "/v1/pair"), ("GET", "/v1/pair"), ("POST", "/"),
+                               ("GET", "/nothing/here"), ("GET", "/../config/profile.json"), ("GET", "/app.js/../../x"), ("DELETE", "/v1/ask")] {
             let none = await send(request(method, path, token: ""), ip: "100.64.1.\(path.count)")
             XCTAssertEqual(none.status, 401, "\(method) \(path) without a token")
             let wrong = await send(request(method, path, token: "jrv_wrong"), ip: "100.64.2.\(path.count)")
@@ -664,5 +665,245 @@ final class RemoteTurnTests: XCTestCase {
         XCTAssertEqual(text, "what's on today")
         XCTAssertEqual(t.fed, 16_000 * 3 + 7 + 8000, "every sample is fed, plus the closing silence")
         XCTAssertTrue(t.waited, "audio is not fed before the recognizer can take it"); XCTAssertTrue(t.finished); XCTAssertTrue(t.cancelled)
+    }
+}
+
+// MARK: - The phone app and pairing
+
+final class WebAppTests: XCTestCase {
+    func file(_ name: String) throws -> String {
+        try String(contentsOf: try XCTUnwrap(WebApp.directory).appendingPathComponent(name), encoding: .utf8)
+    }
+
+    static func captures(_ pattern: String, in text: String) -> [String] {
+        let regex = try! NSRegularExpression(pattern: pattern)
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { Range($0.range(at: 1), in: text).map { String(text[$0]) } }
+    }
+
+    func testTheAppsOwnFilesAreServedWithALockedDownPolicy() throws {
+        for (path, type) in [("/", "text/html"), ("/index.html", "text/html"), ("/app.js", "text/javascript"), ("/app.css", "text/css"),
+                             ("/sw.js", "text/javascript"), ("/manifest.webmanifest", "application/manifest+json")] {
+            let r = try XCTUnwrap(WebApp.response(for: path), path)
+            XCTAssertEqual(r.status, 200); XCTAssertTrue(r.headers["Content-Type"]?.hasPrefix(type) ?? false, path)
+            XCTAssertFalse(r.body.isEmpty, path)
+            let csp = try XCTUnwrap(r.headers["Content-Security-Policy"])
+            XCTAssertTrue(csp.contains("default-src 'none'")); XCTAssertTrue(csp.contains("script-src 'self'")); XCTAssertTrue(csp.contains("frame-ancestors 'none'"))
+            XCTAssertFalse(csp.contains("unsafe"), "no inline or eval'd script, ever")
+        }
+        for path in ["/v1/status", "/app.js.map", "/../Package.swift", "/config/profile.json", "/index.html/", "//", ""] {
+            XCTAssertNil(WebApp.response(for: path), path); XCTAssertFalse(WebApp.isShellPath(path), path)
+        }
+    }
+
+    func testIconsAreRealPNGsOfTheRightSize() throws {
+        for (path, size) in [("/icon-192.png", 192), ("/icon-512.png", 512), ("/apple-touch-icon.png", 180)] {
+            let r = try XCTUnwrap(WebApp.response(for: path))
+            XCTAssertEqual(r.headers["Content-Type"], "image/png")
+            XCTAssertEqual([UInt8](r.body.prefix(4)), [0x89, 0x50, 0x4E, 0x47])
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: r.body))
+            XCTAssertEqual(rep.pixelsWide, size); XCTAssertEqual(rep.pixelsHigh, size)
+        }
+    }
+
+    func testThePageWorksUnderItsOwnPolicyAndTalksOnlyToTheMac() throws {
+        let html = try file("index.html"), js = try file("app.js"), css = try file("app.css"), sw = try file("sw.js")
+        XCTAssertFalse(html.contains("style=\""), "inline styles are blocked by the policy")
+        XCTAssertFalse(html.range(of: #"<script(?![^>]*\bsrc=)"#, options: .regularExpression) != nil, "inline scripts are blocked by the policy")
+        XCTAssertFalse(html.range(of: #"\son[a-z]+=\""#, options: .regularExpression) != nil, "inline event handlers are blocked by the policy")
+        for (name, text) in [("index.html", html), ("app.js", js), ("app.css", css), ("sw.js", sw)] {
+            XCTAssertFalse(text.contains("http://") || text.contains("https://") || text.contains("//cdn"), "\(name) must not load or contact anything but its own origin")
+        }
+        XCTAssertFalse(js.contains("innerHTML"), "text from the Mac is shown as text, never as markup")
+        XCTAssertFalse(js.contains("eval("))
+        // Everything the page, the manifest and the service worker refer to is actually served.
+        var referenced = Set<String>()
+        for name in Self.captures(##"(?:href|src)="([^"#]+)""##, in: html) { referenced.insert(name) }
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try file("manifest.webmanifest").utf8)) as? [String: Any])
+        for icon in manifest["icons"] as? [[String: Any]] ?? [] { referenced.insert(icon["src"] as? String ?? "?") }
+        for name in Self.captures(#""([a-z0-9.\-]+\.(?:css|js|png|webmanifest))""#, in: sw) { referenced.insert(name) }
+        XCTAssertGreaterThanOrEqual(referenced.count, 6)
+        for name in referenced { XCTAssertNotNil(WebApp.response(for: "/" + name), "\(name) is referenced but not served") }
+        XCTAssertEqual(manifest["display"] as? String, "standalone"); XCTAssertNotNil(manifest["start_url"])
+        XCTAssertTrue(sw.contains("/v1/"), "the service worker must leave API calls alone")
+    }
+
+    /// The phone's recorder (JavaScript) and the Mac's decoder (Swift) must agree on what a WAV is.
+    func testAudioRecordedByThePageIsReadByTheMac() throws {
+        let node = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"].first { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let node else { throw XCTSkip("Node is not installed; the page's audio code is not exercised here") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("jarvis-webapp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = """
+        const A = require(process.argv[2]); const fs = require('fs');
+        const rate = 48000, n = rate * 2;                       // what a phone microphone delivers, in 4096-sample chunks
+        const chunks = [];
+        for (let at = 0; at < n; at += 4096) { const c = new Float32Array(Math.min(4096, n - at)); for (let i = 0; i < c.length; i++) c[i] = 0.5 * Math.sin(2 * Math.PI * 440 * (at + i) / rate); chunks.push(c); }
+        const wav = A.wav(A.downsample(A.merge(chunks), rate));
+        fs.writeFileSync(process.argv[3], Buffer.from(wav));
+        const end = A.endpointer();
+        const run = (levels) => { let v = 'continue'; for (const l of levels) { v = end(l, 0.1); if (v !== 'continue') break; } return v; };
+        const speechThenPause = run([...Array(5).fill(0.001), ...Array(20).fill(0.2), ...Array(20).fill(0.001)]);
+        const silence = A.endpointer(); let s = 'continue'; for (let i = 0; i < 100 && s === 'continue'; i++) s = silence(0.001, 0.1);
+        const talker = A.endpointer(); let t = 'continue'; let ticks = 0; while (t === 'continue') { t = talker(0.2, 0.1); ticks++; }
+        console.log(JSON.stringify({ speechThenPause, silence: s, talker: t, talkerSeconds: ticks / 10, same: A.downsample(new Float32Array(10), 16000).length,
+                                     rms: A.rms(new Float32Array([0.5, -0.5])), bytes: Array.from(A.base64ToBytes('AQID')) }));
+        """
+        let scriptURL = dir.appendingPathComponent("check.js"), wavURL = dir.appendingPathComponent("out.wav")
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: node)
+        p.arguments = [scriptURL.path, try XCTUnwrap(WebApp.directory).appendingPathComponent("app.js").path, wavURL.path]
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out; p.standardError = err
+        try p.run(); p.waitUntilExit()
+        XCTAssertEqual(p.terminationStatus, 0, String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: out.fileHandleForReading.readDataToEndOfFile()) as? [String: Any])
+        XCTAssertEqual(report["speechThenPause"] as? String, "done"); XCTAssertEqual(report["silence"] as? String, "nothing")
+        XCTAssertEqual(report["talker"] as? String, "limit"); XCTAssertEqual(report["talkerSeconds"] as? Double ?? 0, 30, accuracy: 0.2)
+        XCTAssertEqual(report["same"] as? Int, 10); XCTAssertEqual(report["rms"] as? Double ?? 0, 0.5, accuracy: 1e-6); XCTAssertEqual(report["bytes"] as? [Int], [1, 2, 3])
+
+        let samples = try AudioCodec.decode(try Data(contentsOf: wavURL), maxSeconds: 60)
+        XCTAssertEqual(samples.count, 32_000, "two seconds at 16 kHz")
+        let rms = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
+        XCTAssertEqual(rms, 0.5 / sqrt(2), accuracy: 0.02, "the tone survives the phone's resampling and the Mac's decoding")
+    }
+
+    func testReadingThisMacsTailscaleName() {
+        XCTAssertEqual(Tailnet.dnsName(fromStatusJSON: Data(#"{"Self":{"DNSName":"sams-macbook.tail1234.ts.net.","HostName":"x"},"Peer":{}}"#.utf8)), "sams-macbook.tail1234.ts.net")
+        XCTAssertNil(Tailnet.dnsName(fromStatusJSON: Data(#"{"Self":{"DNSName":""}}"#.utf8)))
+        XCTAssertNil(Tailnet.dnsName(fromStatusJSON: Data("not json".utf8)))
+        XCTAssertNil(Tailnet.dnsName(fromStatusJSON: Data()))
+    }
+}
+
+final class PairingTests: XCTestCase {
+    var url: URL!
+    var store: RemoteTokenStore!
+    var pairing: PairingCodes!
+    var api: RemoteAPI!
+    let paired = Counter()
+
+    override func setUp() {
+        url = FileManager.default.temporaryDirectory.appendingPathComponent("jarvis-remote-tests-\(UUID().uuidString)/remote/tokens.json")
+        store = RemoteTokenStore(url: url)
+        pairing = PairingCodes()
+        api = RemoteAPI(tokens: store, throttle: AuthThrottle(maxFailures: 3, window: 60, lockout: 300), backend: FakeRemoteBackend(), pairing: pairing)
+        let paired = paired
+        api.onPaired = { _ in paired.add() }
+    }
+    override func tearDown() { try? FileManager.default.removeItem(at: url.deletingLastPathComponent().deletingLastPathComponent()) }
+
+    func post(_ path: String, _ json: [String: Any], token: String? = nil, ip: String = "100.64.0.2") async -> (status: Int, body: [String: Any]) {
+        let body = try! JSONSerialization.data(withJSONObject: json)
+        var headers = ["content-type": "application/json", "content-length": String(body.count)]
+        if let token { headers["authorization"] = "Bearer \(token)" }
+        let r = HTTPRequest(method: "POST", path: path, headers: headers, body: body)
+        let response: HTTPResponse
+        if let refused = api.precheck(r, from: ip) { response = refused } else { response = await api.handle(r, from: ip) }
+        return (response.status, (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any] ?? [:])
+    }
+
+    func testCodes() {
+        let now = Date()
+        let codes = PairingCodes(lifetime: 120, maxAttempts: 3)
+        XCTAssertFalse(codes.isActive(now: now)); XCTAssertNil(codes.redeem("000000", now: now))
+        let offer = codes.begin(name: "iPhone", now: now)
+        XCTAssertTrue(offer.code.count == 6 && offer.code.allSatisfy(\.isNumber)); XCTAssertEqual(offer.expires, now.addingTimeInterval(120))
+        XCTAssertTrue(codes.isActive(now: now))
+        XCTAssertEqual(codes.redeem(offer.code, now: now.addingTimeInterval(60)), "iPhone")
+        XCTAssertNil(codes.redeem(offer.code, now: now.addingTimeInterval(61)), "a code works once")
+        let late = codes.begin(name: "iPhone", now: now)
+        XCTAssertNil(codes.redeem(late.code, now: now.addingTimeInterval(121)), "and only for two minutes")
+        let guessed = codes.begin(name: "iPhone", now: now)
+        let wrong = guessed.code == "111111" ? "222222" : "111111"
+        for _ in 0..<3 { XCTAssertNil(codes.redeem(wrong, now: now)) }
+        XCTAssertNil(codes.redeem(guessed.code, now: now), "three wrong guesses cancel the code, even for the right one")
+        for prefix in ["", "12345", "1234567", " 123456", "abcdef"] { _ = codes.begin(name: "x", now: now); XCTAssertNil(codes.redeem(prefix, now: now)) }
+        XCTAssertNotEqual(Set((0..<20).map { _ in codes.begin(name: "x").code }).count, 1, "codes are random")
+    }
+
+    func testThePairingRouteOnlyExistsWhileACodeIsShowing() async {
+        let closed = await post("/v1/pair", ["code": "123456"])
+        XCTAssertEqual(closed.status, 401); XCTAssertEqual(closed.body["error"] as? String, "unauthorized", "indistinguishable from any other path")
+        XCTAssertTrue(store.isEmpty)
+    }
+
+    func testTheRightCodeGetsThisPhoneItsOwnToken() async throws {
+        let offer = pairing.begin(name: "Sam's iPhone")
+        let r = await post("/v1/pair", ["code": offer.code])
+        XCTAssertEqual(r.status, 200); XCTAssertEqual(r.body["device"] as? String, "Sam's iPhone")
+        let token = try XCTUnwrap(r.body["token"] as? String)
+        XCTAssertEqual(store.verify(token)?.name, "Sam's iPhone"); XCTAssertEqual(paired.value, 1, "the Mac is told, so pairing never goes unnoticed")
+        let again = await post("/v1/pair", ["code": offer.code])
+        XCTAssertEqual(again.status, 401, "the code is spent"); XCTAssertEqual(store.all.count, 1)
+        let status = api.precheck(HTTPRequest(method: "GET", path: "/v1/status", headers: ["authorization": "Bearer \(token)"]), from: "100.64.0.2")
+        XCTAssertNil(status, "the new token is accepted at once")
+    }
+
+    func testWrongCodesAreRefusedCountedAndLockTheGuesserOut() async {
+        let offer = pairing.begin(name: "iPhone")
+        let wrong = offer.code == "111111" ? "222222" : "111111"
+        for _ in 0..<3 { let r = await post("/v1/pair", ["code": wrong], ip: "100.64.0.66"); XCTAssertEqual(r.status, 401) }
+        let locked = await post("/v1/pair", ["code": offer.code], ip: "100.64.0.66")
+        XCTAssertEqual(locked.status, 429, "three wrong guesses lock that device out, right code or not")
+        XCTAssertTrue(store.isEmpty); XCTAssertEqual(paired.value, 0)
+        for junk in [["code": 123456] as [String: Any], ["kode": offer.code], [:]] { let r = await post("/v1/pair", junk, ip: "100.64.0.7"); XCTAssertEqual(r.status, 401) }
+        _ = pairing.begin(name: "iPhone")
+        let big = await post("/v1/pair", ["code": String(repeating: "1", count: 2000)], ip: "100.64.0.8")
+        XCTAssertEqual(big.status, 413)
+    }
+
+    func testAnExpiredCodeIsWorthNothing() async {
+        let codes = PairingCodes(lifetime: 0.05)
+        api = RemoteAPI(tokens: store, backend: FakeRemoteBackend(), pairing: codes)
+        let offer = codes.begin(name: "iPhone")
+        try? await Task.sleep(for: .milliseconds(120))
+        let r = await post("/v1/pair", ["code": offer.code])
+        XCTAssertEqual(r.status, 401); XCTAssertTrue(store.isEmpty)
+    }
+
+    func testTheShellIsPublicButNothingElseIs() async {
+        let page = HTTPRequest(method: "GET", path: "/")
+        XCTAssertNil(api.precheck(page, from: "100.64.0.2"))
+        let served = await api.handle(page, from: "100.64.0.2")
+        XCTAssertEqual(served.status, 200); XCTAssertTrue(String(data: served.body, encoding: .utf8)?.contains("<title>Jarvis</title>") ?? false)
+        let post = HTTPRequest(method: "POST", path: "/", headers: ["content-length": "0"])
+        XCTAssertEqual(api.precheck(post, from: "100.64.0.2")?.status, 401)
+    }
+
+    @MainActor func testAPhoneCanPairBeforeAnyTokenExists() async throws {
+        let suite = "jarvis.tests.remote.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let port = Int.random(in: 20_000...60_000)
+        let config = ConfigStore(directory: ConfigTests.repoConfigDir, env: ["JARVIS_REMOTE_PORT": String(port), "JARVIS_REMOTE_BIND": "loopback"])
+        let remote = RemoteAccess(config: config, tokens: store, backend: FakeRemoteBackend(), defaults: defaults)
+        defer { remote.stop() }
+        remote.isEnabled = true
+        XCTAssertEqual(remote.state, .noTokens, "nothing to pair with and nobody allowed in: closed")
+        XCTAssertThrowsError(try remote.beginPairing(name: "bad/name"))
+        let offer = try remote.beginPairing(name: "iPhone")
+        for _ in 0..<100 where remote.state == .noTokens { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(remote.state, .listening(host: "127.0.0.1", port: UInt16(port)), "open for the two minutes the code is showing")
+
+        let c = URLSessionConfiguration.ephemeral
+        c.connectionProxyDictionary = [:]
+        let session = URLSession(configuration: c)
+        let (html, page) = try await session.data(from: URL(string: "http://127.0.0.1:\(port)/")!)
+        XCTAssertEqual((page as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertNotNil((page as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Security-Policy"))
+        XCTAssertTrue(String(data: html, encoding: .utf8)?.contains("app.js") ?? false)
+        var pair = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/pair")!)
+        pair.httpMethod = "POST"
+        pair.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        pair.httpBody = try JSONSerialization.data(withJSONObject: ["code": offer.code])
+        let (data, response) = try await session.data(for: pair)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        let token = try XCTUnwrap((JSONSerialization.jsonObject(with: data) as? [String: Any])?["token"] as? String)
+        XCTAssertEqual(store.verify(token)?.name, "iPhone")
+        XCTAssertThrowsError(try remote.beginPairing(name: "iphone"), "that name is taken now")
+        remote.refresh()
+        XCTAssertEqual(remote.state, .listening(host: "127.0.0.1", port: UInt16(port)), "and it stays open, because a device has a token now")
     }
 }

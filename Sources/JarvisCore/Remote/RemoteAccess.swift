@@ -52,6 +52,31 @@ public final class RemoteAccess {
         self.addresses = addresses
         let maxAudio = config.tuning.remoteMaxAudioSeconds
         self.api = RemoteAPI(tokens: tokens, backend: backend, maxAudioSeconds: { maxAudio })
+        api.onPaired = { [weak self] name in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.refresh(); self?.onPaired?(name); self?.onChange?() } }
+        }
+    }
+
+    /// A device has just paired (shown on the Mac, so pairing never happens unnoticed).
+    public var onPaired: ((String) -> Void)?
+
+    /// Shows a pairing code for a new device and makes sure the API is reachable for it to be redeemed.
+    public func beginPairing(name raw: String) throws -> PairingCodes.Offer {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 40, name.allSatisfy({ $0.isLetter || $0.isNumber || " -_'’.".contains($0) }) else { throw RemoteTokenStore.TokenError.badName }
+        guard !tokens.all.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { throw RemoteTokenStore.TokenError.exists(name) }
+        let offer = api.pairing.begin(name: name)
+        refresh()
+        DispatchQueue.main.asyncAfter(deadline: .now() + api.pairing.lifetime + 1) { [weak self] in MainActor.assumeIsolated { self?.refresh() } }
+        return offer
+    }
+
+    public func cancelPairing() { api.pairing.cancel(); refresh() }
+
+    /// Where a phone should point its browser, as far as this Mac can tell.
+    public var addressForPhone: String? {
+        if case .listening(let host, let port) = state, !Tailnet.isLoopback(host) { return "http://\(host):\(port)" }
+        return nil
     }
 
     public var isEnabled: Bool {
@@ -102,7 +127,7 @@ public final class RemoteAccess {
         var wanted: (host: String, port: UInt16)?
         var idle = State.off
         if !(isEnabled || bindOverride != nil) { idle = .off }
-        else if tokens.isEmpty { idle = .noTokens }
+        else if tokens.isEmpty, !api.pairing.isActive() { idle = .noTokens }
         else if !(1024...65535).contains(config.tuning.remotePort) { idle = .failed("remotePort must be between 1024 and 65535") }
         else if let host = Self.bindHost(mode: mode, addresses: addresses()) { wanted = (host, UInt16(config.tuning.remotePort)) }
         else { idle = .waitingForTailscale }
