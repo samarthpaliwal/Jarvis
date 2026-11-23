@@ -180,6 +180,10 @@
     "endpointFastSilenceSeconds": 0.9,
     "endpointFastMinWords": 3,
     "ttsFirstChunkMinWords": 3,
-    "cachePrewarmAfterSeconds": 240
+    "cachePrewarmAfterSeconds": 240,
+    "httpTimeoutSeconds": 15,
+    "httpMaxRetries": 2,
+    "httpRetryBaseSeconds": 0.5,
+    "httpRetryMaxSeconds": 8
   }
 }

@@ -99,6 +99,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         JarvisLog.info("UI: \(ui.style) on \(ui.screen) screen, position \(ui.position), halo \(ui.halo)")
         FileLog.maxBytes = Int(config.tuning.logMaxMegabytes * 1024 * 1024)
         FileLog.keepFiles = config.tuning.logKeepFiles
+        HTTP.policy = config.tuning.retryPolicy
         wake = WakeWordService()
         wake.tuning = config.tuning
         transcriber = TranscriberFactory.make(locale: Locale(identifier: config.profile.speech?.locale ?? "en-US"))

@@ -24,7 +24,7 @@ public final class GmailClient: @unchecked Sendable {
         comps.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         var req = URLRequest(url: comps.url!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await HTTP.send(req)
         let obj = (try? JSONSerialization.jsonObject(with: data) as? JSONObject) ?? [:]
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw GoogleAuth.AuthError.server("HTTP \(code) \((obj["error"] as? JSONObject)?["message"] as? String ?? "")") }
@@ -64,7 +64,8 @@ public final class GmailClient: @unchecked Sendable {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        // Creating a draft is not repeatable: retried only when the request provably did not go through.
+        let (data, resp) = try await HTTP.send(req, idempotent: false)
         let obj = (try? JSONSerialization.jsonObject(with: data) as? JSONObject) ?? [:]
         guard (resp as? HTTPURLResponse)?.statusCode == 200, let id = obj["id"] as? String else {
             throw GoogleAuth.AuthError.server("draft failed: \((obj["error"] as? JSONObject)?["message"] as? String ?? "")")
@@ -77,7 +78,7 @@ public final class GmailClient: @unchecked Sendable {
         var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/drafts/\(id)")!)
         req.httpMethod = "DELETE"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await HTTP.send(req)
     }
 
     // MARK: Parsing

@@ -91,7 +91,7 @@ public final class GoogleAuth: @unchecked Sendable {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = form.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")" }
             .joined(separator: "&").data(using: .utf8)
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await HTTP.send(req, idempotent: true)   // token exchange and refresh
         return (try? JSONSerialization.jsonObject(with: data) as? JSONObject) ?? [:]
     }
 

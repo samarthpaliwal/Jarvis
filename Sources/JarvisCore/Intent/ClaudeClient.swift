@@ -63,12 +63,16 @@ public final class ClaudeClient: @unchecked Sendable {
     public var endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     /// `anthropic-version` header. Set from Tuning.
     public var apiVersion = Tuning().anthropicVersion
+    /// Retries for a busy or briefly broken API. Only before the first byte of a reply: once Jarvis has
+    /// started speaking an answer, starting over would say it twice.
+    public var retryPolicy = Tuning().retryPolicy
     private let session: URLSession
     private let apiKeyProvider: () -> String?
 
     public init(tuning: Tuning = Tuning(), apiKeyProvider: @escaping () -> String? = { KeychainStore.apiKey() }) {
         self.apiKeyProvider = apiKeyProvider
         apiVersion = tuning.anthropicVersion
+        retryPolicy = tuning.retryPolicy
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = tuning.llmRequestTimeoutSeconds
         cfg.timeoutIntervalForResource = tuning.llmResourceTimeoutSeconds
@@ -136,13 +140,7 @@ public final class ClaudeClient: @unchecked Sendable {
                     req.setValue(key, forHTTPHeaderField: "x-api-key")
                     req.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
                     req.httpBody = try JSONSerialization.data(withJSONObject: body(for: r))
-                    let (bytes, response) = try await session.bytes(for: req)
-                    guard let http = response as? HTTPURLResponse else { throw ClientError.malformed("no HTTP response") }
-                    if http.statusCode != 200 {
-                        var text = ""
-                        for try await line in bytes.lines { text += line }
-                        throw ClientError.http(http.statusCode, Self.errorMessage(text))
-                    }
+                    let bytes = try await self.open(req)
                     // Anthropic emits one JSON object per `data:` line, so dispatch each line as it arrives
                     // (the line iterator may swallow the blank SSE separators).
                     let state = StreamState()
@@ -156,6 +154,36 @@ public final class ClaudeClient: @unchecked Sendable {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Opens the stream, retrying 429 / 5xx / 529 and dropped connections with backoff, honouring
+    /// `Retry-After` and `x-should-retry`. Returns once the API has answered 200.
+    func open(_ req: URLRequest) async throws -> URLSession.AsyncBytes {
+        var attempt = 0
+        while true {
+            try Task.checkCancellation()
+            do {
+                let (bytes, response) = try await session.bytes(for: req)
+                guard let http = response as? HTTPURLResponse else { throw ClientError.malformed("no HTTP response") }
+                if http.statusCode == 200 { return bytes }
+                var text = ""
+                for try await line in bytes.lines { text += line }
+                let failure = ClientError.http(http.statusCode, Self.errorMessage(text))
+                guard RetryPolicy.isRetryable(status: http.statusCode), attempt < retryPolicy.maxRetries,
+                      !RetryPolicy.serverForbidsRetry(http) else { throw failure }
+                let wait = retryPolicy.delay(attempt: attempt, retryAfter: RetryPolicy.retryAfter(http))
+                HTTP.note(req.url?.host ?? "api", "POST", "HTTP \(http.statusCode)", attempt, wait)
+                try await Task.sleep(for: .milliseconds(Int(wait * 1000)))
+            } catch let error as URLError {
+                // Nothing has been spoken yet, and a model request has no side effects until tools run, so a
+                // dropped connection is safe to retry.
+                guard RetryPolicy.classify(error) != .permanent, attempt < retryPolicy.maxRetries else { throw error }
+                let wait = retryPolicy.delay(attempt: attempt)
+                HTTP.note(req.url?.host ?? "api", "POST", error.localizedDescription, attempt, wait)
+                try await Task.sleep(for: .milliseconds(Int(wait * 1000)))
+            }
+            attempt += 1
         }
     }
 

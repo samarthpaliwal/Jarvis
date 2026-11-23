@@ -77,7 +77,7 @@ public final class WorldService: @unchecked Sendable {
     private func jsonArray(_ url: URL) async throws -> Any {
         var req = URLRequest(url: url)
         req.timeoutInterval = 8
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await HTTP.send(req, session: session)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
             throw NSError(domain: "Jarvis.World", code: 2, userInfo: [NSLocalizedDescriptionKey: "\(url.host ?? "service") returned an error."])
         }

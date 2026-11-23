@@ -104,6 +104,14 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var llmResourceTimeoutSeconds: Double = 300
     public var anthropicVersion: String = "2026-10-21"
 
+    // Network
+    /// Timeout for requests that do not set their own (Gmail, Notion, Spotify, Google sign-in).
+    public var httpTimeoutSeconds: Double = 15
+    /// Extra attempts after a busy server or a dropped connection. Applies to Claude too.
+    public var httpMaxRetries: Int = 2
+    public var httpRetryBaseSeconds: Double = 0.5
+    public var httpRetryMaxSeconds: Double = 8
+
     // Tools
     public var toolCallBudgetPerTurn: Int = 12
     public var localToolCallBudgetPerTurn: Int = 6
@@ -151,6 +159,12 @@ public struct Tuning: Codable, Equatable, Sendable {
 
     public init() {}
 
+    public var retryPolicy: RetryPolicy {
+        var p = RetryPolicy()
+        p.maxRetries = max(0, httpMaxRetries); p.baseDelay = httpRetryBaseSeconds; p.maxDelay = httpRetryMaxSeconds; p.timeout = httpTimeoutSeconds
+        return p
+    }
+
     public init(from decoder: Decoder) throws {
         // Every field is optional in the file; missing ones keep the default above.
         self.init()
@@ -168,6 +182,10 @@ public struct Tuning: Codable, Equatable, Sendable {
         llmRequestTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .llmRequestTimeoutSeconds) ?? llmRequestTimeoutSeconds
         llmResourceTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .llmResourceTimeoutSeconds) ?? llmResourceTimeoutSeconds
         anthropicVersion = try c.decodeIfPresent(String.self, forKey: .anthropicVersion) ?? anthropicVersion
+        httpTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .httpTimeoutSeconds) ?? httpTimeoutSeconds
+        httpMaxRetries = try c.decodeIfPresent(Int.self, forKey: .httpMaxRetries) ?? httpMaxRetries
+        httpRetryBaseSeconds = try c.decodeIfPresent(Double.self, forKey: .httpRetryBaseSeconds) ?? httpRetryBaseSeconds
+        httpRetryMaxSeconds = try c.decodeIfPresent(Double.self, forKey: .httpRetryMaxSeconds) ?? httpRetryMaxSeconds
         toolCallBudgetPerTurn = try c.decodeIfPresent(Int.self, forKey: .toolCallBudgetPerTurn) ?? toolCallBudgetPerTurn
         localToolCallBudgetPerTurn = try c.decodeIfPresent(Int.self, forKey: .localToolCallBudgetPerTurn) ?? localToolCallBudgetPerTurn
         webFetchMaxContentTokens = try c.decodeIfPresent(Int.self, forKey: .webFetchMaxContentTokens) ?? webFetchMaxContentTokens

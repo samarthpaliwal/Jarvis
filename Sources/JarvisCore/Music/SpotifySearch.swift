@@ -26,7 +26,7 @@ public final class SpotifySearch: @unchecked Sendable {
         req.setValue("Basic " + Data("\(id):\(secret)".utf8).base64EncodedString(), forHTTPHeaderField: "Authorization")
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = Data("grant_type=client_credentials".utf8)
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await HTTP.send(req, idempotent: true)   // asking for a token twice is harmless
         let obj = (try? JSONSerialization.jsonObject(with: data) as? JSONObject) ?? [:]
         guard (resp as? HTTPURLResponse)?.statusCode == 200, let t = obj["access_token"] as? String else {
             throw NSError(domain: "Jarvis.Spotify", code: 2, userInfo: [NSLocalizedDescriptionKey: "Spotify rejected the client ID/secret."])
@@ -43,7 +43,7 @@ public final class SpotifySearch: @unchecked Sendable {
         c.queryItems = [.init(name: "q", value: query), .init(name: "type", value: type), .init(name: "limit", value: "1")]
         var req = URLRequest(url: c.url!)
         req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, _) = try await HTTP.send(req)
         let obj = (try? JSONSerialization.jsonObject(with: data) as? JSONObject) ?? [:]
         return Self.parse(obj, kind: type)
     }

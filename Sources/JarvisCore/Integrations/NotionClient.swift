@@ -46,7 +46,9 @@ public final class NotionClient: @unchecked Sendable {
         req.setValue("2025-09-03", forHTTPHeaderField: "Notion-Version")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let body { req.httpBody = try JSONSerialization.data(withJSONObject: body) }
-        let (data, resp) = try await session.data(for: req)
+        // Searches and queries are POSTs that only read; creating a page is not, and must not be sent twice.
+        let readOnly = method == "GET" || path == "search" || path.hasSuffix("/query")
+        let (data, resp) = try await HTTP.send(req, session: session, idempotent: readOnly)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? JSONObject else { throw NotionError.malformed }
         guard code == 200 else { throw NotionError.http(code, obj["message"] as? String ?? "") }

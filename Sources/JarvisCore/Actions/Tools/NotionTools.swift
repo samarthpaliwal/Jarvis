@@ -84,6 +84,6 @@ extension NotionClient {
         req.setValue("2025-09-03", forHTTPHeaderField: "Notion-Version")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["properties": [property: ["date": ["start": date]]]])
-        _ = try await URLSession.shared.data(for: req)
+        _ = try await HTTP.send(req, idempotent: true)   // PATCH with the same body is repeatable
     }
 }

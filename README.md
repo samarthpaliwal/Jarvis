@@ -617,6 +617,24 @@ the pipeline returns to `idle`. Nothing fails silently and nothing hangs.
 | A cloud or Kokoro voice fails | The sentence is spoken by the Apple voice instead. |
 | A transition the state table does not allow | Logged and counted (`Illegal transition`). |
 
+### Network: timeouts and retries
+
+Every outgoing request goes through [Net/HTTP.swift](Sources/JarvisCore/Net/HTTP.swift).
+
+- **Timeout:** 15 s for Gmail, Notion, Spotify, and Google sign-in (`tuning.httpTimeoutSeconds`). Weather keeps
+  its own 8 s. Claude has a 60 s idle timeout between stream packets.
+- **Retries:** up to two more attempts (`tuning.httpMaxRetries`) on 408, 429, 5xx, 529, and dropped
+  connections. Waits start at 0.5 s, double each time with 25% jitter, and never exceed 8 s. A `Retry-After`
+  header from the server is obeyed up to that 8 s cap, and `x-should-retry: false` stops retrying.
+- **Nothing is created twice.** A request that creates something (a Gmail draft, a Notion page) is retried only
+  when it provably did not go through: 429, 503, 529, or a connection that never opened. A 500 or a timeout
+  on such a request is reported, not repeated.
+- **Claude** is retried only before the first byte of a reply. Once Jarvis has started speaking an answer,
+  starting over would say it twice.
+- **Offline** fails at once, so Jarvis says "I'm offline right now" instead of waiting.
+
+Each retry is a `Retry N for …` line in `jarvis.log` and a `retry` event in the trace.
+
 The messages live in [Pipeline/Failures.swift](Sources/JarvisCore/Pipeline/Failures.swift). The tests force
 each failure with fakes and check that Jarvis speaks and recovers.
 
