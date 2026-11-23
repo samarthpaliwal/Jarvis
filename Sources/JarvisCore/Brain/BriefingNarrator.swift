@@ -43,10 +43,10 @@ public final class BriefingNarrator {
         if let c = r.nextClass { data += "\nNext class: \(fmt(c))" }
         if !headlines.isEmpty { data += "\nHeadlines: " + headlines.joined(separator: " | ") }
 
-        var request = ClaudeClient.Request(model: ProcessInfo.processInfo.environment["CLAUDE_MODEL"] ?? p.claude.model,
+        var request = ClaudeClient.Request(model: Env.value("CLAUDE_MODEL") ?? p.claude.model,
                                            system: Self.systemPrompt(name: p.assistant.addressUserAs),
                                            messages: [["role": "user", "content": Untrusted.wrap(data, source: "briefing-data")]],
-                                           tools: [], maxTokens: 400, effort: "low")
+                                           tools: [], maxTokens: 400, effort: config.tuning.llmEffort)
         request.systemVolatile = ""
         do {
             let text = try await withThrowingTaskGroup(of: String.self) { group in

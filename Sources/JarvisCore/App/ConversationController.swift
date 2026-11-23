@@ -440,7 +440,7 @@ public final class ConversationController: ObservableObject {
             wake.setPaused(true)
             approvalTimeout?.cancel()
             approvalTimeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(self?.config.tuning.approvalTimeoutSeconds ?? 12))
                 guard !Task.isCancelled else { return }
                 self?.resolveApproval(id: request.id, approved: false, reason: "timeout")
             }

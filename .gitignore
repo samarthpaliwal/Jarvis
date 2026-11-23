@@ -5,3 +5,23 @@ build/
 .swiftpm/
 .DS_Store
 xcuserdata/
+
+# Secrets and local overrides (only the example is tracked)
+.env
+.env.*
+!.env.example
+*.env
+jarvis.env
+*.pem
+*.p12
+*.key
+
+# Runtime data: logs, memory, voice enrollment
+*.log
+logs/
+*.db
+*.db-wal
+*.db-shm
+voiceprint/
+*.embedding
+*.npy

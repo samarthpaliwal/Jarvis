@@ -46,7 +46,7 @@ public final class AudioCapture: @unchecked Sendable {
     /// ~3% in Activity Monitor as a performance core, at lower energy. JARVIS_AUDIO_QOS=userInitiated
     /// moves it to a performance core for experiments.
     private let queue = DispatchQueue(label: "com.samarth.jarvis.audio",
-                                      qos: ProcessInfo.processInfo.environment["JARVIS_AUDIO_QOS"] == "userInitiated" ? .userInitiated : .utility)
+                                      qos: Env.value("JARVIS_AUDIO_QOS") == "userInitiated" ? .userInitiated : .utility)
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioCapture.sampleRate,
                                           channels: 1, interleaved: false)!
     /// Owned by the render thread: built lazily from the format of the buffers that actually arrive.

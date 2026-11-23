@@ -33,7 +33,7 @@ public enum ConfigLocator {
     }
 
     public static func resolve() -> URL {
-        if let env = ProcessInfo.processInfo.environment["JARVIS_CONFIG_DIR"], !env.isEmpty {
+        if let env = Env.value("JARVIS_CONFIG_DIR"), !env.isEmpty {
             return URL(fileURLWithPath: (env as NSString).expandingTildeInPath, isDirectory: true)
         }
         if isComplete(userConfigDirectory) { return userConfigDirectory }

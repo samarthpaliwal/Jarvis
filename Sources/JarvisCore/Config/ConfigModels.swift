@@ -300,6 +300,8 @@ public struct Profile: Codable, Equatable {
     public var ui: UI?
     public var voice: Voice?
     public var web: Web?
+    /// Thresholds, limits, and timeouts. See Settings.swift.
+    public var tuning: Tuning?
 
     /// Used when profile.json is missing or malformed so the app still launches.
     public static let fallback = Profile(

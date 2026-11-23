@@ -190,7 +190,7 @@ public final class AnalyzerSpeechTranscriber: Transcriber, @unchecked Sendable {
 /// Picks SpeechAnalyzer on macOS 26+, else SFSpeechRecognizer.
 public enum TranscriberFactory {
     public static func make(locale: Locale) -> Transcriber {
-        if #available(macOS 26.0, *), ProcessInfo.processInfo.environment["JARVIS_FORCE_SFSPEECH"] != "1" {
+        if #available(macOS 26.0, *), Env.value("JARVIS_FORCE_SFSPEECH") != "1" {
             return AnalyzerSpeechTranscriber(locale: locale)
         }
         return AppleSpeechTranscriber(locale: locale)

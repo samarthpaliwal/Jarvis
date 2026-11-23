@@ -97,6 +97,28 @@ Bundled defaults never overwrite your edits. Set `JARVIS_CONFIG_DIR` to point so
 If a file fails to parse, Jarvis still launches with built-in defaults and shows the exact
 error in the menu bar.
 
+### Tuning and environment overrides
+
+Every threshold, limit, and timeout lives in `profile.json → tuning` (wake threshold, mic recovery
+timings, Claude effort and timeouts, tool budgets, approval timeout, speech ports). Nothing is a literal
+in the code; the definitions and defaults are in [Config/Settings.swift](Sources/JarvisCore/Config/Settings.swift).
+
+Any tuning field can be overridden by an environment variable named `JARVIS_` plus the field in upper
+snake case, for example `wakeThreshold` → `JARVIS_WAKE_THRESHOLD`. A menu-bar app has no shell
+environment, so Jarvis also reads an env file:
+
+```bash
+cp .env.example ~/Library/Application\ Support/Jarvis/jarvis.env
+```
+
+Uncomment what you want, then restart Jarvis. The real process environment wins over the file, and the
+file wins over `profile.json`. Overrides that took effect are logged at startup, and a value that is not a
+valid number is reported in the menu bar and ignored.
+
+**Secrets never go in the env file.** API keys stay in the macOS Keychain. Jarvis ignores any variable
+in `jarvis.env` whose name contains KEY, TOKEN, SECRET, PASSWORD, or CREDENTIAL, and says so in the log.
+`.gitignore` excludes env files, logs, databases, and voice enrollment data.
+
 ## Using Milestone 1
 
 Click the waveform icon in the menu bar:

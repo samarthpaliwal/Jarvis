@@ -40,6 +40,19 @@ public final class WakeWordService: ObservableObject {
     public nonisolated(unsafe) var audioTap: (([Float]) -> Void)?
 
     public let capture = AudioCapture()
+    /// Wake threshold, cooldown, and microphone recovery timings. Safe to set before or after start().
+    public var tuning = Tuning() { didSet { applyTuning() } }
+
+    private func applyTuning() {
+        runner.cooldown = tuning.wakeCooldownSeconds
+        runner.detector?.threshold = Float(tuning.wakeThreshold)
+        var t = AudioCapture.Tuning()
+        t.silenceTimeout = tuning.micSilenceTimeoutSeconds
+        t.restartDebounce = tuning.micRestartDebounceSeconds
+        t.maxBackoff = tuning.micMaxBackoffSeconds
+        t.deafAfterRebuilds = tuning.micDeafAfterRebuilds
+        capture.tuning = t
+    }
     private let runner = Runner()
     private var detectorFactory: () throws -> WakeWordDetector
 
@@ -82,14 +95,15 @@ public final class WakeWordService: ObservableObject {
             if runner.detector == nil {
                 let det = try detectorFactory()
                 if let oww = det as? OpenWakeWordDetector,
-                   let b = ProcessInfo.processInfo.environment["JARVIS_WAKE_BATCH"].flatMap(Int.init) {
+                   let b = Env.value("JARVIS_WAKE_BATCH").flatMap(Int.init) {
                     oww.batchSize = b
                 }
                 runner.detector = det
+                applyTuning()
             }
             try capture.start()
             // JARVIS_WAKE_PAUSED=1 keeps the mic open but skips inference (used for CPU baselines).
-            runner.isPaused = ProcessInfo.processInfo.environment["JARVIS_WAKE_PAUSED"] == "1"
+            runner.isPaused = Env.value("JARVIS_WAKE_PAUSED") == "1"
             state = runner.isPaused ? .paused : .listening
         } catch {
             state = .failed(error.localizedDescription)
@@ -139,9 +153,9 @@ public final class WakeWordService: ObservableObject {
         private var cooldownUntil = Date.distantPast
         private var stats = Stats()
         private var inferenceTotal: Double = 0
-        private let cooldown: TimeInterval = 2.0
+        var cooldown: TimeInterval = 2.0
         /// `JARVIS_WAKE_DEBUG=1` logs every score ≥ 0.1.
-        private let debugScores = ProcessInfo.processInfo.environment["JARVIS_WAKE_DEBUG"] == "1"
+        private let debugScores = Env.value("JARVIS_WAKE_DEBUG") == "1"
 
         func process(_ chunk: [Float]) {
             guard let detector, !isPaused else { return }

@@ -6,7 +6,9 @@ import Foundation
 public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDelegate, @unchecked Sendable {
     public enum Provider: String, Sendable { case elevenlabs, openai, kokoro }
     /// Where the local Kokoro server listens (set by the app).
-    public static var kokoroBaseURL = URL(string: "http://127.0.0.1:8880")!
+    public static var kokoroBaseURL = URL(string: "http://127.0.0.1:\(Tuning().kokoroPort)")!
+    public static var openAIModel = Tuning().openaiTtsModel
+    public static var requestTimeout: TimeInterval = Tuning().ttsRequestTimeoutSeconds
     private static let localSession: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.connectionProxyDictionary = [:]
@@ -20,7 +22,7 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     public var name: String {
         switch provider {
         case .elevenlabs: return "ElevenLabs (\(voiceSettings.elevenLabsModel))"
-        case .openai: return "OpenAI gpt-4o-mini-tts (\(voiceSettings.openAIVoice))"
+        case .openai: return "OpenAI \(Self.openAIModel) (\(voiceSettings.openAIVoice))"
         case .kokoro: return "Kokoro on-device (\(voiceSettings.kokoroVoice))"
         }
     }
@@ -150,7 +152,7 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
             return ["text": text, "model_id": voiceSettings.elevenLabsModel,
                     "voice_settings": ["stability": 0.45, "similarity_boost": 0.8, "style": 0.15, "use_speaker_boost": true, "speed": 1.0]]
         case .openai:
-            return ["model": "gpt-4o-mini-tts", "voice": voiceSettings.openAIVoice, "input": text,
+            return ["model": Self.openAIModel, "voice": voiceSettings.openAIVoice, "input": text,
                     "instructions": voiceSettings.openAIInstructions, "response_format": "mp3"]
         case .kokoro:
             return ["input": text, "voice": voiceSettings.kokoroVoice, "speed": voiceSettings.kokoroSpeed]
@@ -160,7 +162,7 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     private func synthesize(_ text: String) async throws -> Data {
         let (base, why) = requestBody()
         guard var req = base else { throw NSError(domain: "Jarvis.TTS", code: 1, userInfo: [NSLocalizedDescriptionKey: why]) }
-        req.timeoutInterval = 15
+        req.timeoutInterval = Self.requestTimeout
         req.httpBody = try JSONSerialization.data(withJSONObject: payload(for: text))
         let (data, resp) = try await (provider == .kokoro ? Self.localSession : URLSession.shared).data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0

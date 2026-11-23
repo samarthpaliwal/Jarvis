@@ -98,6 +98,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         JarvisLog.info("UI: \(ui.style) on \(ui.screen) screen, position \(ui.position), halo \(ui.halo)")
         wake = WakeWordService()
+        wake.tuning = config.tuning
         transcriber = TranscriberFactory.make(locale: Locale(identifier: config.profile.speech?.locale ?? "en-US"))
         JarvisLog.info("Voice candidates: " + VoicePicker.candidates().prefix(4).map { "\($0.name)[\($0.identifier) r\(VoicePicker.rank($0))]" }.joined(separator: ", "))
         // A saved plain default voice ("Daniel") is upgraded once to the best installed voice (Siri neural first).
@@ -107,8 +108,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         speech = AppleSpeechOutput(preferredVoice: UserDefaults.standard.string(forKey: "jarvis.voice") ?? config.profile.assistant.voiceIdentifier)
         voice = SpeechRouter(apple: speech)
-        kokoro = KokoroService()
+        kokoro = KokoroService(port: config.tuning.kokoroPort)
         CloudSpeechOutput.kokoroBaseURL = kokoro.baseURL
+        CloudSpeechOutput.openAIModel = config.tuning.openaiTtsModel
+        CloudSpeechOutput.requestTimeout = config.tuning.ttsRequestTimeoutSeconds
         voice.kokoroReady = { [weak self] in self?.kokoro.isReady ?? false }
         voice.configure(Self.effectiveVoice(config.profile.voice))
         kokoro.onReady = { [weak self] in
@@ -146,7 +149,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             MemoryTool(store: memory), MemorySearchTool(store: memory), WeatherTool(world: world), NewsHeadlinesTool(world: world),
             UseSkillTool(library: skills),
         ])
-        brain = Brain(dispatcher: dispatcher, config: config, modes: modes, undo: undo)
+        brain = Brain(client: ClaudeClient(tuning: config.tuning), dispatcher: dispatcher, config: config, modes: modes, undo: undo)
         brain.memory = memory
         brain.skills = skills
         brain.local = local
@@ -253,7 +256,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         JarvisLog.info("Speech in: \(transcriber.name) · Speech out: \(voice.engineName) · Apple fallback: \(speech.name)")
 
         // JARVIS_NO_WAKE=1 skips the microphone entirely (used for CPU baselines).
-        if ProcessInfo.processInfo.environment["JARVIS_NO_WAKE"] != "1" {
+        if Env.value("JARVIS_NO_WAKE") != "1" {
             Task {
                 await wake.start()
                 let ok = await transcriber.requestAuthorization()

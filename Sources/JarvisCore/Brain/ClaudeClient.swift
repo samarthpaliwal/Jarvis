@@ -61,14 +61,17 @@ public final class ClaudeClient: @unchecked Sendable {
     }
 
     public var endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    /// `anthropic-version` header. Set from Tuning.
+    public var apiVersion = Tuning().anthropicVersion
     private let session: URLSession
     private let apiKeyProvider: () -> String?
 
-    public init(apiKeyProvider: @escaping () -> String? = { KeychainStore.apiKey() }) {
+    public init(tuning: Tuning = Tuning(), apiKeyProvider: @escaping () -> String? = { KeychainStore.apiKey() }) {
         self.apiKeyProvider = apiKeyProvider
+        apiVersion = tuning.anthropicVersion
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 60
-        cfg.timeoutIntervalForResource = 300
+        cfg.timeoutIntervalForRequest = tuning.llmRequestTimeoutSeconds
+        cfg.timeoutIntervalForResource = tuning.llmResourceTimeoutSeconds
         session = URLSession(configuration: cfg)
     }
 
@@ -104,7 +107,7 @@ public final class ClaudeClient: @unchecked Sendable {
                     req.httpMethod = "POST"
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     req.setValue(key, forHTTPHeaderField: "x-api-key")
-                    req.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
+                    req.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
                     req.httpBody = try JSONSerialization.data(withJSONObject: body(for: r))
                     let (bytes, response) = try await session.bytes(for: req)
                     guard let http = response as? HTTPURLResponse else { throw ClientError.malformed("no HTTP response") }

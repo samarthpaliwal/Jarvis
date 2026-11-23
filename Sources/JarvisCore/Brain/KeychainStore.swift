@@ -59,7 +59,8 @@ public enum KeychainStore {
         SecItemDelete(query as CFDictionary)
     }
 
-    /// Env var wins (handy for development), then Keychain.
+    /// Process env var wins (handy for development), then Keychain. Deliberately not read from
+    /// jarvis.env: secrets do not belong in a plain-text file.
     public static func apiKey() -> String? {
         if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"], !env.isEmpty { return env }
         return read()

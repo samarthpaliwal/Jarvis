@@ -147,5 +147,27 @@
     "maxSearchesPerTurn": 5,
     "maxFetchesPerTurn": 3,
     "deepResearch": false
+  },
+  "tuning": {
+    "wakeThreshold": 0.5,
+    "wakeCooldownSeconds": 2.0,
+    "micSilenceTimeoutSeconds": 6,
+    "micRestartDebounceSeconds": 0.5,
+    "micMaxBackoffSeconds": 60,
+    "micDeafAfterRebuilds": 3,
+    "llmEffort": "low",
+    "llmMaxHistoryMessages": 24,
+    "llmMaxToolRounds": 6,
+    "llmHistoryTimeoutMinutes": 10,
+    "llmRequestTimeoutSeconds": 60,
+    "llmResourceTimeoutSeconds": 300,
+    "anthropicVersion": "2026-10-21",
+    "toolCallBudgetPerTurn": 12,
+    "localToolCallBudgetPerTurn": 6,
+    "webFetchMaxContentTokens": 8000,
+    "approvalTimeoutSeconds": 12,
+    "kokoroPort": 8880,
+    "openaiTtsModel": "gpt-4o-mini-tts",
+    "ttsRequestTimeoutSeconds": 15
   }
 }

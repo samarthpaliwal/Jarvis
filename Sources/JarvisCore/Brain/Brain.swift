@@ -28,9 +28,9 @@ public final class Brain: ObservableObject {
     /// Incremented per cloud turn; only the newest turn may write `history`.
     private var generation = 0
     private var lastActivity = Date.distantPast
-    private let historyTimeout: TimeInterval = 10 * 60
-    private let maxHistoryMessages = 24
-    private let maxToolRounds = 6
+    private var historyTimeout: TimeInterval { config.tuning.llmHistoryTimeoutMinutes * 60 }
+    private var maxHistoryMessages: Int { max(2, config.tuning.llmMaxHistoryMessages) }
+    private var maxToolRounds: Int { max(1, config.tuning.llmMaxToolRounds) }
 
     @Published public private(set) var isOnline = true
     private let pathMonitor = NWPathMonitor()
@@ -47,7 +47,7 @@ public final class Brain: ObservableObject {
                                               "memory", "memory_search", "file_search", "set_brightness", "set_display_mode", "welcome_home"]
 
     public var model: String {
-        ProcessInfo.processInfo.environment["CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 } ?? config.profile.claude.model
+        Env.value("CLAUDE_MODEL").flatMap { $0.isEmpty ? nil : $0 } ?? config.profile.claude.model
     }
 
     public init(client: ClaudeClient = ClaudeClient(), dispatcher: ToolDispatcher, config: ConfigStore, modes: ModeManager, undo: UndoStack) {
@@ -124,14 +124,15 @@ public final class Brain: ObservableObject {
         if let catalog = skills?.catalog { stable += "\n\n" + catalog }          // changes only when skills are installed
         if config.profile.memory?.enabled ?? true, let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
         // Web tools first so the cache breakpoint stays on the last custom tool.
-        let tools = Self.webTools(model: model, profile: config.profile, mode: mode) + dispatcher.definitions(for: mode)
-        var guardian = LoopGuard()
+        let tools = Self.webTools(model: model, profile: config.profile, mode: mode, fetchMaxContentTokens: config.tuning.webFetchMaxContentTokens)
+            + dispatcher.definitions(for: mode)
+        var guardian = LoopGuard(budget: config.tuning.toolCallBudgetPerTurn)
         defer { if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) } }
 
         for round in 0...maxToolRounds {
             convo = Self.sanitized(convo)
             var request = ClaudeClient.Request(model: model, system: stable, messages: convo, tools: tools,
-                                               maxTokens: config.profile.claude.maxTokens, effort: "low")
+                                               maxTokens: config.profile.claude.maxTokens, effort: config.tuning.llmEffort)
             request.systemVolatile = volatile
             var assistantContent: [JSONObject] = []
             var currentText = ""
@@ -262,7 +263,7 @@ public final class Brain: ObservableObject {
         }
         messages.append(["role": "user", "content": userText])
         let tools = OllamaClient.tools(from: dispatcher.definitions(for: mode).filter { Self.localToolNames.contains($0["name"] as? String ?? "") })
-        var guardian = LoopGuard(budget: 6)
+        var guardian = LoopGuard(budget: config.tuning.localToolCallBudgetPerTurn)
         for round in 0..<4 {
             let reply = try await client.chat(messages: messages, tools: tools, onText: { t in turn.text += t; onText(t) })
             JarvisLog.info("Local round \(round): \(reply.text.count) chars, tools=\(reply.toolCalls.map(\.name))")
@@ -379,7 +380,8 @@ public final class Brain: ObservableObject {
     }
 
     /// Anthropic's server-side web tools. The dynamic-filtering versions need a recent model.
-    nonisolated static func webTools(model: String, profile: Profile, mode: ModeDefinition, timeZone: TimeZone = .current) -> [JSONObject] {
+    nonisolated static func webTools(model: String, profile: Profile, mode: ModeDefinition, timeZone: TimeZone = .current,
+                                     fetchMaxContentTokens: Int = Tuning().webFetchMaxContentTokens) -> [JSONObject] {
         let web = profile.web ?? Profile.Web()
         guard web.enabled else { return [] }
         // Voice wants the basic variants: the dynamic-filtering ones (_20260209) write and run code over the
@@ -398,7 +400,7 @@ public final class Brain: ObservableObject {
         }
         if ToolDispatcher.allowed("web_fetch", in: mode), web.maxFetchesPerTurn > 0 {
             tools.append(["type": modern ? "web_fetch_20260209" : "web_fetch_20250910", "name": "web_fetch",
-                          "max_uses": web.maxFetchesPerTurn, "max_content_tokens": 8000])
+                          "max_uses": web.maxFetchesPerTurn, "max_content_tokens": fetchMaxContentTokens])
         }
         return tools
     }
