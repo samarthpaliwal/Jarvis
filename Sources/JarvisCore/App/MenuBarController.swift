@@ -24,6 +24,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var camera: CameraController?
     /// Set by the app; adds the Voice ID submenu.
     public var voiceID: SpeakerVerifier?
+    /// Set by the app; adds the Keys submenu.
+    public weak var keys: AppDelegate?
     public var onEnrollVoice: (() -> Void)?
     private let googleAuth: GoogleAuth
     private let notion: NotionClient
@@ -233,6 +235,44 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         integItem.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         integItem.submenu = integ
         menu.addItem(integItem)
+        if let keys {
+            let vault = SecretVault.shared
+            let item = NSMenuItem(title: "Keys", action: nil, keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "touchid", accessibilityDescription: nil)
+            let sub = NSMenu()
+            let line: String
+            switch vault.state {
+            case .legacy: line = "Using the macOS Keychain directly"
+            case .locked: line = "Locked"
+            case .unlocking: line = "Waiting for Touch ID…"
+            case .unlocked: line = "Unlocked · \(keys.keyStatus?.vault.count ?? 0) saved"
+            case .failed: line = "Could not unlock"
+            }
+            let status = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            sub.addItem(status)
+            if vault.usesHelper {
+                sub.addItem(.separator())
+                if vault.state != .unlocked {
+                    sub.addItem(ClosureMenuItem(title: "Unlock with Touch ID…", symbol: "touchid") { keys.unlockKeys() })
+                }
+                let notMoved = Set(keys.keyStatus?.legacy ?? []).subtracting(keys.keyStatus?.vault ?? [])
+                if !notMoved.isEmpty {
+                    sub.addItem(ClosureMenuItem(title: "Import \(notMoved.count) Key\(notMoved.count == 1 ? "" : "s") from the Old Keychain…", symbol: "square.and.arrow.down") { keys.unlockKeys() })
+                }
+                let touch = ClosureMenuItem(title: "Require Touch ID to Unlock", symbol: nil) {
+                    keys.setKeysRequireTouchID(!(keys.keyStatus?.touchID ?? true))
+                }
+                touch.state = (keys.keyStatus?.touchID ?? true) ? .on : .off
+                sub.addItem(touch)
+            } else {
+                let hint = NSMenuItem(title: "Run scripts/install-keyhelper.sh for Touch ID", action: nil, keyEquivalent: "")
+                hint.isEnabled = false
+                sub.addItem(hint)
+            }
+            item.submenu = sub
+            menu.addItem(item)
+        }
         if let voiceID {
             let enrolled = voiceID.voiceprint
             let item = NSMenuItem(title: "Voice ID", action: nil, keyEquivalent: "")

@@ -59,6 +59,8 @@ public final class ConversationController: ObservableObject {
     public var onTurnActive: ((Bool) -> Void)?
     /// Called when the first word of a spoken request is transcribed.
     public var onFirstWord: (() -> Void)?
+    /// Called when a request failed because the saved keys are locked, so the app can ask for Touch ID.
+    public var onKeysNeeded: (() -> Void)?
 
     /// Streams a reply for a transcript. Default: the Brain (Claude). Tests can swap it.
     public var responder: (String, @escaping (String) -> Void) async throws -> Brain.Turn
@@ -487,6 +489,7 @@ public final class ConversationController: ObservableObject {
             // After a timeout, anything already said stays said; add the failure as its own sentence.
             onText(currentReply.isEmpty ? msg : " " + msg)
             failed = true
+            if case ClaudeClient.ClientError.noAPIKey = error, SecretVault.shared.usesHelper, SecretVault.shared.state != .unlocked { onKeysNeeded?() }
             request?.event(SpokenFailure.stage(of: error), "error", ["error": String(describing: type(of: error)), "message": String(error.localizedDescription.prefix(200))])
             JarvisLog.error("Brain: \(error.localizedDescription)")
         }

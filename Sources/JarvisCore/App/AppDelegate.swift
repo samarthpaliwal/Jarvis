@@ -20,6 +20,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var timers: TimerService!
     public private(set) var actionLog: ActionLog!
     private var restartedAfterCrash = false
+    /// This very process was started by the launchd agent.
+    private var supervisedByLaunchd = false
+    private var unlockingKeys = false
+    /// What the Keys menu shows. Updated after each unlock; reading it never spawns the helper.
+    public private(set) var keyStatus: (vault: [String], legacy: [String], touchID: Bool)?
     private var hangWatchdog: HangWatchdog!
     public private(set) var budget: Budget!
     public private(set) var contacts: ContactBook!
@@ -85,11 +90,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        JarvisLog.info("Jarvis starting (pid \(ProcessInfo.processInfo.processIdentifier)\(Supervisor.isLoaded ? ", supervised by launchd" : ""))")
+        let me = ProcessInfo.processInfo.processIdentifier
+        let agent = Supervisor.agentState
+        supervisedByLaunchd = agent.pid == me
+        JarvisLog.info("Jarvis starting (pid \(me)\(supervisedByLaunchd ? ", supervised by launchd" : agent.loaded ? ", opened by hand" : ""))")
         // The login item and the launchd agent can both start a copy. The second one leaves quietly;
         // exit code 0 tells launchd not to restart it.
         if Supervisor.anotherInstanceIsRunning {
             JarvisLog.warn("Another Jarvis is already running; this copy is exiting")
+            exit(0)
+        }
+        // Opened by hand while the supervisor is idle (after Quit, say): let launchd run it instead, so it
+        // is restarted after a crash and replaced cleanly on a rebuild.
+        if Supervisor.shouldHandOver(agent: agent, myProgram: Bundle.main.executablePath ?? CommandLine.arguments[0]) {
+            JarvisLog.info("Handing over to the launchd supervisor; it starts Jarvis in a second")
+            Supervisor.startAgentSoon()
             exit(0)
         }
         let launch = Supervisor.noteLaunch()
@@ -112,6 +127,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         ConfigLocator.mergeNewDefaultKeys()
         ConfigLocator.seedSkillsIfNeeded()
         config = ConfigStore()
+        // Saved keys: one unlock through the key helper (Touch ID), then everything is read from memory.
+        // Without the helper installed this is the old direct Keychain path, now cached.
+        SecretVault.shared.configure(helper: ProcessKeyHelper())
+        JarvisLog.info("Keys: " + (SecretVault.shared.usesHelper ? "key helper installed; unlocking" : "key helper not installed (scripts/install-keyhelper.sh); reading the Keychain directly"))
+        unlockKeys()
         notch = NotchViewModel()
         notchWindow = NotchWindowController(model: notch)
         modes = ModeManager(config: config, notch: notch)
@@ -220,8 +240,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
         conversation.onFirstWord = { [weak self] in self?.brain.prewarmIfCold() }
         conversation.voiceID = voiceID
+        conversation.onKeysNeeded = { [weak self] in self?.unlockKeys() }
         // A frozen main thread is not a crash, so launchd would never notice. This does.
-        let supervised = Supervisor.isLoaded
+        let supervised = supervisedByLaunchd
         hangWatchdog = HangWatchdog(timeout: config.tuning.hangTimeoutSeconds) { silent in
             JarvisLog.error("Main thread has not responded for \(Int(silent)) s. " + (supervised ? "Exiting so launchd restarts Jarvis." : "Jarvis is frozen; quit and reopen it."))
             if supervised {
@@ -311,8 +332,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.budget = budget
         menuBar.camera = camera
         menuBar.voiceID = voiceID
+        menuBar.keys = self
         menuBar.onEnrollVoice = { [weak self] in self?.startVoiceEnrollment() }
-        JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() == nil ? "MISSING" : "present")")
+        JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() != nil ? "present" : SecretVault.shared.usesHelper && SecretVault.shared.state != .unlocked ? "locked until Touch ID" : "MISSING")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
                                     onBriefing: { [weak self] in
                                         guard let self else { return }
@@ -361,6 +383,63 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let g = notchWindow.geometry
         JarvisLog.info("Notch detected=\(g.hasNotch) width=\(Int(g.notchWidth)) height=\(Int(g.notchHeight)) reduceMotion=\(notch.reduceMotion)")
+    }
+
+    // MARK: Saved keys
+
+    /// Asks the key helper for the saved keys. The helper asks for Touch ID. Runs off the main thread, so
+    /// Jarvis keeps listening while the prompt is up; until it is answered, cloud features have no keys.
+    public func unlockKeys() {
+        guard SecretVault.shared.usesHelper, !unlockingKeys else { return }
+        unlockingKeys = true
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let report = SecretVault.shared.unlock()
+            let status = SecretVault.shared.status()
+            await self?.keysUnlocked(report, status)
+        }
+    }
+
+    private func keysUnlocked(_ report: SecretVault.UnlockReport, _ status: (vault: [String], legacy: [String], touchID: Bool)?) {
+        unlockingKeys = false
+        keyStatus = status
+        // Names only. A key's value never reaches a log.
+        JarvisLog.info("Keys: \(report.state); available: \(report.present.joined(separator: ", "))"
+                       + (report.imported.isEmpty ? "" : "; moved into the vault: \(report.imported.joined(separator: ", "))")
+                       + (report.denied.isEmpty ? "" : "; not moved (prompt declined): \(report.denied.joined(separator: ", "))")
+                       + (report.needsApproval.isEmpty ? "" : "; needs approval again: \(report.needsApproval.joined(separator: ", "))"))
+        voice?.configure(Self.effectiveVoice(config.profile.voice))     // paid voices depend on their keys
+        switch report.state {
+        case .unlocked:
+            if !report.imported.isEmpty {
+                notch?.flash("Moved \(report.imported.count) saved key\(report.imported.count == 1 ? "" : "s") into the vault. From now on it's Touch ID, not the keychain password.", seconds: 7)
+            } else if !report.denied.isEmpty {
+                notch?.flash("\(report.denied.count) saved key\(report.denied.count == 1 ? " was" : "s were") not moved. Keys → Import Keys in the menu tries again.", seconds: 7)
+            }
+        case .locked:
+            notch?.flash("Keys are locked. Choose Keys → Unlock with Touch ID in the Jarvis menu.", seconds: 6)
+        case .failed(let why):
+            JarvisLog.error("Keys: unlock failed: \(why)")
+            notch?.flash("Couldn't unlock the saved keys: \(why)", seconds: 7)
+        default: break
+        }
+    }
+
+    /// Turns Touch ID for unlocking on or off. Turning it off asks for Touch ID one last time.
+    public func setKeysRequireTouchID(_ on: Bool) {
+        Task.detached { [weak self] in
+            do {
+                try SecretVault.shared.setRequiresTouchID(on)
+                let status = SecretVault.shared.status()
+                await self?.touchIDPolicyChanged(status, note: on ? "Touch ID is required to unlock the saved keys." : "Saved keys unlock without Touch ID now.")
+            } catch {
+                await self?.touchIDPolicyChanged(nil, note: "Not changed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func touchIDPolicyChanged(_ status: (vault: [String], legacy: [String], touchID: Bool)?, note: String) {
+        if let status { keyStatus = status }
+        notch?.flash(note, seconds: 6)
     }
 
     /// Runs the guided Voice ID setup as soon as Jarvis is idle (it may be mid-reply when asked).

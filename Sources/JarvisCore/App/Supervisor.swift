@@ -54,6 +54,50 @@ public enum Supervisor {
     /// True when launchd currently knows the agent.
     public static var isLoaded: Bool { launchctl(["print", "\(domain)/\(label)"]).status == 0 }
 
+    /// What launchd says about the agent right now.
+    public struct AgentState: Equatable, Sendable {
+        public var loaded: Bool
+        /// The process launchd is running for the agent, if it is running one.
+        public var pid: Int32?
+        /// The program the agent starts.
+        public var program: String?
+        public init(loaded: Bool, pid: Int32? = nil, program: String? = nil) { self.loaded = loaded; self.pid = pid; self.program = program }
+    }
+
+    public static var agentState: AgentState {
+        let r = launchctl(["print", "\(domain)/\(label)"])
+        return r.status == 0 ? parseAgentState(r.output) : AgentState(loaded: false)
+    }
+
+    /// Reads the top-level `pid = …` and `program = …` lines of `launchctl print`.
+    static func parseAgentState(_ output: String) -> AgentState {
+        var state = AgentState(loaded: true)
+        for line in output.split(separator: "\n") where line.hasPrefix("\t") && !line.hasPrefix("\t\t") {
+            let parts = line.dropFirst().components(separatedBy: " = ")
+            guard parts.count == 2 else { continue }
+            if parts[0] == "pid" { state.pid = Int32(parts[1]) }
+            if parts[0] == "program" { state.program = parts[1] }
+        }
+        return state
+    }
+
+    /// A copy opened by hand (double-click, `open`) while the agent is loaded but running nothing is not
+    /// supervised: launchd would neither restart it after a crash nor replace it on `scripts/run.sh`.
+    /// Such a copy should step aside and let launchd start the agent's copy instead.
+    public static func shouldHandOver(agent: AgentState, myProgram: String) -> Bool {
+        guard agent.loaded, agent.pid == nil, let program = agent.program else { return false }
+        return URL(fileURLWithPath: program).resolvingSymlinksInPath().path == URL(fileURLWithPath: myProgram).resolvingSymlinksInPath().path
+    }
+
+    /// Asks launchd to start the agent a moment from now, after this copy has exited.
+    static func startAgentSoon() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "sleep 1; /bin/launchctl kickstart \(domain)/\(label)"]
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+        try? p.run()
+    }
+
     /// Writes the agent and hands it to launchd. `executable` is the binary inside Jarvis.app.
     public static func install(executable: String, start: Bool) throws {
         let logs = FileLog.directory.path

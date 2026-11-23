@@ -5,11 +5,13 @@ import PackageDescription
 //  - JarvisCore: all app logic (testable library)
 //  - Jarvis:     a thin executable that boots NSApplication
 //  - JarvisObjC: a tiny Objective-C shim for catching NSException
+//  - JarvisKeyHelper: a small frozen helper that holds saved keys behind Touch ID
 let package = Package(
     name: "Jarvis",
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Jarvis", targets: ["Jarvis"]),
+        .executable(name: "jarvis-keyhelper", targets: ["JarvisKeyHelper"]),
         .library(name: "JarvisCore", targets: ["JarvisCore"]),
     ],
     dependencies: [
@@ -33,10 +35,13 @@ let package = Package(
             dependencies: ["JarvisCore"],
             path: "Sources/Jarvis"
         ),
+        // Keeps saved keys and releases them after Touch ID. Built once, then left alone (see main.swift).
+        .executableTarget(name: "JarvisKeyHelper", path: "Sources/JarvisKeyHelper"),
         .testTarget(
             name: "JarvisCoreTests",
             dependencies: ["JarvisCore"],
-            path: "Tests/JarvisCoreTests"
+            path: "Tests/JarvisCoreTests",
+            exclude: ["Fixtures"]      // read from disk by path; not bundled
         ),
     ]
 )

@@ -36,9 +36,9 @@ Launch at Login is unavailable.
 
 The build script signs ad-hoc by default. macOS ties Microphone, Speech, Calendar and
 Automation grants to the code signature, and an ad-hoc signature changes every build, so you
-will be re-prompted after each rebuild. **This also makes the Keychain
-re-ask before handing over the API key after every rebuild** (the app sits at "Config loaded" in the
-log until you click Allow). Fix it once with a stable self-signed identity:
+will be re-prompted after each rebuild. Fix it once with a stable self-signed identity (this keeps the
+permission grants; the saved keys are a separate matter, see *Keys: Touch ID instead of the keychain
+password*):
 
 ```bash
 scripts/make-dev-cert.sh
@@ -49,7 +49,7 @@ JARVIS_SIGN_IDENTITY="Jarvis Dev" scripts/run.sh
 ```
 
 (Or make it in Keychain Access → Certificate Assistant → Create a Certificate → name `Jarvis Dev`,
-type Code Signing.) Click "Always Allow" on the Keychain prompt the first time.
+type Code Signing.)
 
 ## Architecture
 
@@ -278,8 +278,9 @@ will be optional and documented here first.
 ## Claude (Milestone 4)
 
 **API key.** Jarvis menu → *Set API Key…*: paste with ⌘V or click *Paste from Clipboard & Save*.
-It is stored in your login Keychain as `com.samarth.jarvis / ANTHROPIC_API_KEY`, the only Keychain
-item Jarvis ever reads; tools cannot reach it. From a terminal, copy the key first, then:
+It is stored in the Keychain and released to Jarvis after Touch ID (see *Keys: Touch ID instead of the
+keychain password*). Jarvis's own saved keys are the only Keychain items it ever reads; tools cannot reach
+them. From a terminal, copy the key first, then:
 
 ```bash
 scripts/set-api-key.sh
@@ -513,6 +514,54 @@ ollama pull qwen3.5:9b
 ```
 
 The menu shows "Local model: … ready" once it's available.
+
+## Keys: Touch ID instead of the keychain password
+
+Jarvis keeps its API keys and tokens (Claude, Google, Notion, Spotify, ElevenLabs, OpenAI) in the macOS
+Keychain. On their own, Keychain items are approved per program, and for an app without an Apple
+Developer signature "the program" means the exact binary. Every rebuild made a new binary, so macOS asked
+for the keychain password again, sometimes in the middle of a conversation, underneath the HUD.
+
+So the keys now sit behind a small separate program, `jarvis-keyhelper`:
+
+```bash
+scripts/install-keyhelper.sh     # once. It is deliberately NOT rebuilt when Jarvis is.
+```
+
+- **It never changes, so its approval sticks.** It is installed to
+  `~/Library/Application Support/Jarvis/bin/` and left alone. Rebuilding Jarvis does not touch it.
+- **Touch ID unlocks it.** When Jarvis starts, the helper asks for Touch ID (or the Mac's password, which
+  is macOS's own fallback) and then hands all the keys over in one go. Jarvis holds them in memory until
+  it quits. Nothing is asked again while it runs, and never during a conversation.
+- **Only Jarvis can ask.** The helper checks that the program calling it is a validly signed
+  `com.samarth.jarvis` carrying the same certificate as itself, and refuses anything else:
+
+  ```bash
+  echo '{}' | ~/Library/Application\ Support/Jarvis/bin/jarvis-keyhelper get
+  # {"error":"refused: caller is com.apple.zsh, not Jarvis","ok":false}
+  ```
+
+- **The first run moves the old keys in.** macOS asks for the keychain password one last time per saved
+  key ("jarvis-keyhelper wants to use…"). Choose *Always Allow*. A key you decline stays where it was and
+  keeps working the old way; *Keys → Import … Keys from the Old Keychain* tries again.
+
+| Menu → Keys | |
+|---|---|
+| Status line | How many keys are unlocked, or "Locked". |
+| Unlock with Touch ID… | Ask again, for example after cancelling the prompt at startup. |
+| Require Touch ID to Unlock | On by default. Turning it off itself needs Touch ID. |
+
+If Jarvis is asked something while the keys are locked it says so ("My keys are locked. Unlock me with
+Touch ID, then ask again.") and brings the Touch ID prompt up.
+
+What this does and does not protect: the keys are released only to Jarvis, only after Touch ID, and are
+never written to disk outside the Keychain. They are in Jarvis's memory while it runs, as before. The
+helper's own Keychain approval is tied to its exact binary, so `install-keyhelper.sh --force` (a new
+helper build) brings the password prompts back once. Without the helper installed, Jarvis reads the
+Keychain directly as it used to, once per key per launch. Unit tests never touch the real Keychain.
+
+Why not the Keychain's built-in Touch ID protection? That needs an entitlement only an Apple Developer
+team signature can carry; with a self-signed certificate macOS answers `-34018`.
 
 ## Safety model (enforced in code, Milestone 4)
 
@@ -903,7 +952,7 @@ Unit tests write to a temporary folder, never to these files.
 - Brightness uses a private framework and works on the built-in display only. Focus needs the Shortcuts above.
 - Call detection is heuristic (camera in use or a call app running). A browser-only Meet call with the camera off is not detected.
 - Idle CPU with the wake word is 3–4 % in `top`, just above the 3 % target; the embedding model is the floor.
-- Ad-hoc signing re-prompts for permissions and Keychain access after every rebuild; `scripts/make-dev-cert.sh` fixes that.
+- Ad-hoc signing re-prompts for permissions after every rebuild; `scripts/make-dev-cert.sh` fixes that. Saved keys are unlocked with Touch ID through `jarvis-keyhelper` and no longer depend on the signature.
 - I could not make a live Claude call during development because no API key was on this machine. The request shape is unit-tested and follows the current API docs; the first real turn is yours. If something 400s, the error text is spoken and logged.
 - `media_control` posts system media-key events; on some macOS versions this needs Accessibility. If play/pause does nothing, that's why.
 - Wake → first transcribed word measured 1.3 s with SpeechAnalyzer (includes the natural pause after "Hey Jarvis"). Partial results arrive faster once you're mid-sentence.
@@ -917,6 +966,14 @@ Unit tests write to a temporary folder, never to these files.
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.12.1 — Touch ID for the saved keys (2026-11-23)
+- **No more keychain password prompts.** A small, never-rebuilt helper (`jarvis-keyhelper`) holds the saved
+  keys and releases them to Jarvis after Touch ID, once per launch. Before, every rebuild made macOS ask for
+  the keychain password again, per key, sometimes mid-conversation under the HUD where it could not be typed.
+- The helper refuses any caller that is not Jarvis. Existing keys move over on the first run.
+- New *Keys* menu; a locked vault is spoken as such instead of "no API key".
+- Unit tests no longer read the real Keychain.
 
 ### 0.12.0 — Camera, and upgrade phase 4: Voice ID (2026-11-23)
 - **Camera:** live feed window, video and photo capture to `~/Movies/Jarvis` and `~/Pictures/Jarvis`. A

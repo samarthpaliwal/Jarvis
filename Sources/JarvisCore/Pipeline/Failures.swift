@@ -90,7 +90,10 @@ public enum SpokenFailure {
         }
         if let e = error as? ClaudeClient.ClientError {
             switch e {
-            case .noAPIKey: return "I don't have an API key yet. Add one from the Jarvis menu."
+            case .noAPIKey:
+                let vault = SecretVault.shared
+                if vault.usesHelper, vault.state != .unlocked { return "My keys are locked. Unlock me with Touch ID, then ask again." }
+                return "I don't have an API key yet. Add one from the Jarvis menu."
             case .http(let code, _):
                 switch code {
                 case 401, 403: return "The API key was rejected. Check it in the Jarvis menu."

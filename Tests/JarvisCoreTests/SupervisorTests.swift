@@ -88,4 +88,20 @@ final class HangWatchdogTests: XCTestCase {
         w.stop()
         XCTAssertEqual(hangs, 0, "a responsive main thread never trips it")
     }
+
+    func testReadsWhatLaunchdSaysAboutTheAgent() {
+        let running = "gui/501/com.samarth.jarvis = {\n\tactive count = 5\n\tstate = running\n\n\tprogram = /Apps/Jarvis.app/Contents/MacOS/Jarvis\n\targuments = {\n\t\t/Apps/Jarvis.app/Contents/MacOS/Jarvis\n\t}\n\truns = 12\n\tpid = 36340\n\tendpoints = {\n\t\tpid = 1\n\t}\n}\n"
+        XCTAssertEqual(Supervisor.parseAgentState(running), .init(loaded: true, pid: 36340, program: "/Apps/Jarvis.app/Contents/MacOS/Jarvis"))
+        let idle = "gui/501/com.samarth.jarvis = {\n\tstate = not running\n\tprogram = /Apps/Jarvis.app/Contents/MacOS/Jarvis\n\truns = 11\n\tlast exit code = 0\n}\n"
+        XCTAssertEqual(Supervisor.parseAgentState(idle), .init(loaded: true, pid: nil, program: "/Apps/Jarvis.app/Contents/MacOS/Jarvis"))
+    }
+
+    func testACopyOpenedByHandStepsAsideOnlyWhenTheSupervisorIsIdleAndWouldStartTheSameProgram() {
+        let app = "/Apps/Jarvis.app/Contents/MacOS/Jarvis"
+        XCTAssertTrue(Supervisor.shouldHandOver(agent: .init(loaded: true, pid: nil, program: app), myProgram: app), "reopened after Quit")
+        XCTAssertFalse(Supervisor.shouldHandOver(agent: .init(loaded: true, pid: 100, program: app), myProgram: app), "launchd started this copy: never hand over, or it would loop")
+        XCTAssertFalse(Supervisor.shouldHandOver(agent: .init(loaded: true, pid: 77, program: app), myProgram: app), "launchd's copy is already running")
+        XCTAssertFalse(Supervisor.shouldHandOver(agent: .init(loaded: false), myProgram: app), "Keep Running is off")
+        XCTAssertFalse(Supervisor.shouldHandOver(agent: .init(loaded: true, pid: nil, program: app), myProgram: "/src/.build/debug/Jarvis"), "a development build is left alone")
+    }
 }

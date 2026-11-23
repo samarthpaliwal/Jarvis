@@ -1,7 +1,8 @@
 import Foundation
 import Security
 
-/// Jarvis's own Keychain item. This is the only Keychain access in the app, and tools never see it.
+/// Jarvis's saved keys. Everything goes through `SecretVault`, which reads each key once and keeps it in
+/// memory. Tools never see this type. Under unit tests nothing touches the real Keychain.
 public enum KeychainStore {
     public static let service = "com.samarth.jarvis"
     public static let apiKeyAccount = "ANTHROPIC_API_KEY"
@@ -16,50 +17,25 @@ public enum KeychainStore {
         }
     }
 
+    /// Values used in place of the Keychain while the unit tests run.
+    nonisolated(unsafe) static var testValues: [String: String] = [:]
+
     public static func read(account: String = apiKeyAccount) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data,
-              let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !s.isEmpty else { return nil }
-        return s
+        if Runtime.isTesting { return testValues[account] }
+        return SecretVault.shared.read(account)
     }
 
     public static func write(_ value: String, account: String = apiKeyAccount) throws {
-        let data = Data(value.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let update: [String: Any] = [kSecValueData as String: data]
-        var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        if status == errSecItemNotFound {
-            var add = query
-            add[kSecValueData as String] = data
-            add[kSecAttrLabel as String] = "Jarvis \(account)"
-            status = SecItemAdd(add as CFDictionary, nil)
-        }
-        guard status == errSecSuccess else { throw KeychainError.status(status) }
+        if Runtime.isTesting { testValues[account] = value.trimmingCharacters(in: .whitespacesAndNewlines); return }
+        try SecretVault.shared.write(value, account: account)
     }
 
     public static func delete(account: String = apiKeyAccount) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
+        if Runtime.isTesting { testValues[account] = nil; return }
+        SecretVault.shared.delete(account)
     }
 
-    /// Process env var wins (handy for development), then Keychain. Deliberately not read from
+    /// Process env var wins (handy for development), then the vault. Deliberately not read from
     /// jarvis.env: secrets do not belong in a plain-text file.
     public static func apiKey() -> String? {
         if let env = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"], !env.isEmpty { return env }

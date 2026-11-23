@@ -5,7 +5,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 "$ROOT/scripts/build-app.sh" "${1:-release}"
 LABEL="gui/$(id -u)/com.samarth.jarvis"
 if launchctl print "$LABEL" >/dev/null 2>&1; then
-  # Supervised: let launchd restart it, so there is never a second copy.
+  # Supervised: let launchd restart it, so there is never a second copy. A copy that was opened by hand is
+  # not launchd's to stop, and the new one would exit as a duplicate, so ask any running copy to quit first.
+  pkill -TERM -x Jarvis 2>/dev/null || true
+  for _ in $(seq 1 50); do pgrep -x Jarvis >/dev/null 2>&1 || break; sleep 0.1; done
   launchctl kickstart -k "$LABEL"
   echo "✓ Jarvis restarted under launchd. Logs: ~/Library/Logs/Jarvis/jarvis.log"
 else
