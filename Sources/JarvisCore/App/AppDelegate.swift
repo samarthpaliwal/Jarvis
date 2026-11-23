@@ -397,6 +397,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.camera = camera
         menuBar.computerControl = computerControl
         menuBar.radar = radar
+        menuBar.dispatcher = dispatcher
         radar.onChange = { [weak self] now, before in
             guard let self, before != .unknown || now == .away else { return }      // the first "near" after launch is not news
             self.notch.flash(now == .near ? "\(self.radar.phoneName) is back" : "\(self.radar.phoneName) has left")

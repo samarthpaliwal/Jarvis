@@ -40,6 +40,15 @@ public enum DispatchError: LocalizedError, Equatable {
 public final class ToolDispatcher {
     public private(set) var tools: [String: JarvisTool] = [:]
     public var approvalHandler: ((ApprovalRequest) async -> Bool)?
+    /// "Ask once per chat" (menu toggle). See ApprovalSession for what it never covers.
+    public var approvalSession = ApprovalSession(enabled: UserDefaults.standard.bool(forKey: ApprovalSession.key))
+    var now: () -> Date = Date.init
+
+    /// True when an earlier yes in this chat already covers this kind of action.
+    private func coveredByEarlierYes(_ name: String) -> Bool {
+        approvalSession.covers(name, at: now(), readOutsideContent: !(RequestTrace.current?.untrustedSources ?? []).isEmpty,
+                               fromPhone: RequestTrace.current?.source == "remote")
+    }
     /// Called after Tier 1+ actions with the one-liner ("Set volume to 40%").
     public var onSummary: ((String) -> Void)?
     /// Seconds one tool may run. Read from Tuning on every call.
@@ -112,6 +121,7 @@ public final class ToolDispatcher {
 
     public func call(_ name: String, input: JSONObject, source: ToolCallSource) async -> ToolResult {
         let started = Date()
+        if source == .user { approvalSession.userActed(at: now()) }
         let inputSummary = Self.describe(input)
         func record(_ outcome: String, tier: Tier, summary: String? = nil) {
             let ms = Date().timeIntervalSince(started) * 1000
@@ -157,6 +167,10 @@ public final class ToolDispatcher {
                 return .error(why)
             }
             let request = ApprovalRequest(toolName: name, preview: Self.withOutsideContentNote(await tool.approvalPreview(for: input, context: context)))
+            if coveredByEarlierYes(name) {
+                record("approved", tier: .approve, summary: "earlier yes this chat: \(request.preview)")
+                JarvisLog.info("Approval: covered by an earlier yes this chat (\(name))")
+            } else {
             guard let handler = approvalHandler else {
                 record("denied", tier: .approve, summary: "no approval handler")
                 return .error(DispatchError.needsApproval(name).localizedDescription)
@@ -167,6 +181,8 @@ public final class ToolDispatcher {
                 return .error(DispatchError.rejected(name).localizedDescription)
             }
             record("approved", tier: .approve, summary: request.preview)
+            approvalSession.grant(name, at: now())
+            }
         }
         do {
             // A tool that hangs (one Gmail call once ran for 15 minutes) must not hang the request.
@@ -179,8 +195,13 @@ public final class ToolDispatcher {
                     record("refused", tier: .approve, summary: "confirmation not available: \(preview)")
                     return false
                 }
+                if self.coveredByEarlierYes(name) {
+                    record("approved", tier: .approve, summary: "earlier yes this chat: \(preview)")
+                    return true
+                }
                 let ok = await handler(ApprovalRequest(toolName: name, preview: Self.withOutsideContentNote(preview)))
                 record(ok ? "approved" : "rejected", tier: .approve, summary: preview)
+                if ok { self.approvalSession.grant(name, at: self.now()) }
                 return ok
             }
             var result = try await Self.$confirmer.withValue(ask) {

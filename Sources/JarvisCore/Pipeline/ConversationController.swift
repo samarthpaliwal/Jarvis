@@ -265,7 +265,7 @@ public final class ConversationController: ObservableObject {
             }
             // Talking over Jarvis (not an echo of its own voice) interrupts and becomes the next turn.
             if speechBargeInAllowed, state == .speaking,
-               Self.isGenuineInterruption(heard: u.text, spoken: currentReply) {
+               Self.isGenuineInterruption(heard: u.text, spoken: currentReply, minimumWords: outputIsHeadphones() ? 2 : 3) {
                 JarvisLog.info("Barge-in: speech while speaking: “\(u.text)”", request: trace?.id)
                 trace?.finish(outcome: "interrupted")
                 speech.stop()
@@ -547,8 +547,9 @@ public final class ConversationController: ObservableObject {
     }
 
     /// Words heard while Jarvis talks: a real interruption, or just the mic hearing Jarvis?
-    nonisolated static func isGenuineInterruption(heard: String, spoken: String) -> Bool {
-        guard EchoGuard.words(heard).count >= 2 else { return false }
+    /// Through the speakers the mic also hears Jarvis, so a little more is needed before it counts.
+    nonisolated static func isGenuineInterruption(heard: String, spoken: String, minimumWords: Int = 2) -> Bool {
+        guard EchoGuard.words(heard).count >= minimumWords else { return false }
         return !EchoGuard.isEchoWhileSpeaking(heard: heard, spoken: spoken)
     }
 

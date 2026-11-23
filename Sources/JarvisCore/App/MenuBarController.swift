@@ -24,6 +24,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var camera: CameraController?
     var computerControl: ComputerControl?
     var radar: PhoneRadar?
+    var dispatcher: ToolDispatcher?
     /// Set by the app; adds the Voice ID submenu.
     public var voiceID: SpeakerVerifier?
     /// Set by the app; adds the Privacy submenu: where data goes with the current settings.
@@ -641,6 +642,15 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         login.state = LaunchAtLogin.isEnabled ? .on : .off
         login.isEnabled = LaunchAtLogin.isAvailable && !Supervisor.isInstalled   // the supervisor already starts it at login
         menu.addItem(login)
+        let once = ClosureMenuItem(title: "Ask for Approval Once per Chat", symbol: "checkmark.shield") { [dispatcher, notch] in
+            dispatcher?.approvalSession.enabled.toggle()
+            let on = dispatcher?.approvalSession.enabled ?? false
+            if !on { dispatcher?.approvalSession.end() }
+            UserDefaults.standard.set(on, forKey: ApprovalSession.key)
+            notch.flash(on ? "One yes per kind of action, per chat" : "Asking every time")
+        }
+        once.state = (dispatcher?.approvalSession.enabled ?? false) ? .on : .off
+        menu.addItem(once)
         if let radar {
             let sub = NSMenu()
             let line = NSMenuItem(title: radar.statusLine, action: nil, keyEquivalent: ""); line.isEnabled = false; sub.addItem(line)
