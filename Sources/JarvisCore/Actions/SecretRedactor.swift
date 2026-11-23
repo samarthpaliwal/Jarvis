@@ -67,13 +67,16 @@ public struct LoopGuard {
     private var recent: [String] = []
     private var calls = 0
     public let budget: Int
+    /// Tools whose result changes between identical calls. They still count toward the budget.
+    static let repeatable: Set<String> = ["computer"]
 
     public init(budget: Int = 12) { self.budget = budget }
 
     public mutating func check(tool: String, input: JSONObject) -> String? {
         let canon = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys])).map { String(decoding: $0, as: UTF8.self) } ?? "\(input)"
         let key = tool + "|" + canon
-        if seen.contains(key) {
+        // Looking at the screen again, or pressing Tab twice, is the normal way to use the mouse and keyboard.
+        if !Self.repeatable.contains(tool), seen.contains(key) {
             return "Loop detected: you already called \(tool) with exactly these arguments this turn. Use the earlier result."
         }
         seen.insert(key)

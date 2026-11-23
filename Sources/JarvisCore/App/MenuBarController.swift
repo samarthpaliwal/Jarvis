@@ -22,6 +22,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var budget: Budget?
     /// Set by the app; adds the Camera submenu.
     public var camera: CameraController?
+    var computerControl: ComputerControl?
     /// Set by the app; adds the Voice ID submenu.
     public var voiceID: SpeakerVerifier?
     /// Set by the app; adds the Privacy submenu: where data goes with the current settings.
@@ -639,6 +640,15 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         login.state = LaunchAtLogin.isEnabled ? .on : .off
         login.isEnabled = LaunchAtLogin.isAvailable && !Supervisor.isInstalled   // the supervisor already starts it at login
         menu.addItem(login)
+        if let control = computerControl {
+            let on = control.isEnabled
+            let item = ClosureMenuItem(title: on ? "Computer Control: on, \(control.minutesLeft) min left (click to turn off)" : "Computer Control: off (say “enable computer control”)", symbol: "cursorarrow.click.2") {
+                control.disable(reason: "menu")
+            }
+            item.state = on ? .on : .off
+            item.isEnabled = on
+            menu.addItem(item)
+        }
         let awake = ClosureMenuItem(title: "Stay Awake While Plugged In", symbol: "bolt") { [notch] in
             StayAwake.shared.enabled.toggle()
             notch.flash(StayAwake.shared.enabled ? "Staying awake while plugged in (closing the lid still sleeps)" : "Normal sleep")

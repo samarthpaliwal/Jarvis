@@ -7,6 +7,8 @@
 - **"Open YouTube"** opens any public https site (`open_website`); banking, payment and password sites refused.
 - **Govee lights** (`lights`): on, off, colour, brightness, warmth. Needs a Govee API key.
 - **Stay Awake While Plugged In** (menu): the Mac stays reachable from the phone while on the charger.
+- **Mouse and keyboard control** (`computer`): off until asked, ten minutes at a time, Esc stops it; blocked
+  apps and pages, password fields, risky clicks and Return gated in code. The HUD steps aside for browser pages.
 - **HUD:** no longer disappears when a conversation starts during its fade-out; new menu switch
   *Keep HUD On Screen Until I Click It*.
 

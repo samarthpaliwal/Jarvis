@@ -360,6 +360,35 @@ sleep on its own, so the phone app can still reach Jarvis when you are out. The 
 request Jarvis holds (like `caffeinate`), not a system setting: it ends when the charger is unplugged or
 Jarvis quits. **Closing the lid still puts the Mac to sleep**; leave it open, or use an external display.
 
+## Mouse and keyboard control
+
+Off by default. It turns on only when you say so ("Hey Jarvis, enable computer control"), for ten minutes
+(up to thirty if you ask), and is off again after every restart. While it is on, Jarvis can look at the screen,
+click, type a line, press keys, and scroll (`computer`). The menu shows the state and turns it off with a click.
+
+One-time setup, which only you can do: System Settings → Privacy & Security → **Accessibility** → switch Jarvis
+on (macOS opens the right page the first time), and **Screen & System Audio Recording** → Jarvis.
+
+What the code enforces, not just what the model is told:
+
+- **Esc turns it off at once.** So does clicking or typing yourself right after Jarvis acted.
+- **One yes per app** each time it is switched on ("Use the mouse and keyboard in Safari").
+- **Never in:** terminals, Mail, Messages and other chat apps, System Settings, the App Store, code editors,
+  password managers, anything in `denylist.json`, or a window whose title mentions a bank, a payment, a
+  checkout, billing, or passwords. Those apps are also cut out of the picture Jarvis sees.
+- **Never:** typing into a password field, typing anything that looks like a key, pasting, locking, logging out.
+- **A yes first** for a click on anything labelled send, post, buy, pay, order, delete, submit, sign in,
+  install, download, accept and the like, and for Return anywhere except a search box or the address bar.
+- **Only at the Mac.** Not from the phone, not from a briefing, timer, or mode change.
+- **The screen is outside content.** After a look, the request is treated like one that read a web page.
+- Each look sends one picture of the screen to Claude (shown under *Privacy* while control is on). It is not
+  saved. Private Mode and gpt-oss cannot see, so it only works with Claude.
+
+**What it cannot promise.** The labels come from what each app tells macOS. A web page with an unlabelled
+or oddly named button can be clicked without a question. Jarvis is told to stop and ask before anything that
+sends, buys, or deletes, and the gates above catch the usual cases, but watch it while it works.
+A request gets at most sixteen steps, so long tasks need to be asked for in parts.
+
 ## Vision: looking on demand
 
 "Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.

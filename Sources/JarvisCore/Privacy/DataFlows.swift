@@ -31,13 +31,14 @@ public struct PrivacySnapshot: Equatable, Sendable {
     public var notionConnected: Bool
     public var spotifyConnected: Bool
     public var goveeConnected: Bool = false
+    public var computerControlOn: Bool = false
     public var remoteListening: Bool
     public var voiceIDEnrolled: Bool
     public init(transcriber: String, transcriberUsesServer: Bool, voiceEngine: String, claudeConfigured: Bool, hostedModel: String? = nil, privateMode: Bool = false, googleConnected: Bool,
-                notionConnected: Bool, spotifyConnected: Bool, goveeConnected: Bool = false, remoteListening: Bool, voiceIDEnrolled: Bool) {
+                notionConnected: Bool, spotifyConnected: Bool, goveeConnected: Bool = false, computerControlOn: Bool = false, remoteListening: Bool, voiceIDEnrolled: Bool) {
         self.transcriber = transcriber; self.transcriberUsesServer = transcriberUsesServer; self.voiceEngine = voiceEngine
         self.claudeConfigured = claudeConfigured; self.hostedModel = hostedModel; self.privateMode = privateMode; self.googleConnected = googleConnected; self.notionConnected = notionConnected
-        self.spotifyConnected = spotifyConnected; self.goveeConnected = goveeConnected; self.remoteListening = remoteListening; self.voiceIDEnrolled = voiceIDEnrolled
+        self.spotifyConnected = spotifyConnected; self.goveeConnected = goveeConnected; self.computerControlOn = computerControlOn; self.remoteListening = remoteListening; self.voiceIDEnrolled = voiceIDEnrolled
     }
 }
 
@@ -75,6 +76,7 @@ public enum Privacy {
         }
         if s.googleConnected { out.append(DataFlow(stage: "Gmail", kind: .text, what: "searches, and drafts or emails you approve", destination: "Google", leavesMac: true, when: "only when you ask about email")) }
         if s.notionConnected { out.append(DataFlow(stage: "Notion", kind: .text, what: "searches and pages you ask for", destination: "Notion", leavesMac: true, when: "only when you ask about notes")) }
+        if s.computerControlOn && !s.privateMode { out.append(DataFlow(stage: "Computer control", kind: .image, what: "pictures of your screen", destination: "Anthropic", leavesMac: true, when: "only while computer control is switched on and Jarvis looks")) }
         if s.goveeConnected { out.append(DataFlow(stage: "Lights", kind: .text, what: "light commands (on, off, colour)", destination: "Govee", leavesMac: true, when: "only when you ask for the lights")) }
         if s.spotifyConnected { out.append(DataFlow(stage: "Music", kind: .text, what: "song searches", destination: "Spotify", leavesMac: true, when: "only when you ask for music")) }
         out.append(DataFlow(stage: "Weather", kind: .text, what: "your city", destination: "Open-Meteo", leavesMac: true, when: "briefings and weather questions"))

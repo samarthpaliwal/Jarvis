@@ -35,6 +35,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             notionConnected: KeychainStore.read(account: NotionClient.tokenAccount) != nil,
             spotifyConnected: KeychainStore.read(account: SpotifySearch.clientIDAccount) != nil,
             goveeConnected: KeychainStore.read(account: GoveeClient.keyAccount) != nil,
+            computerControlOn: computerControl.isEnabled,
             remoteListening: listening, voiceIDEnrolled: voiceID?.isEnrolled ?? false))
     }
     /// This very process was started by the launchd agent.
@@ -61,6 +62,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var proactive: ProactiveScheduler!
     public private(set) var moveLog: MoveLog!
     public private(set) var hud: HUDWindowController!
+    public let computerControl = ComputerControl()
+    private var controlWatcher: ControlInterruptWatcher?
+    private var controlTimer: Timer?
     public private(set) var spotter: PhraseSpotter!
     public private(set) var scenes: SceneDirector!
     public private(set) var memory: MemoryStore!
@@ -319,6 +323,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             self.notch.log.removeAll()
             self.brain.endSession()
         }.store(in: &cancellables)
+        // Mouse and keyboard control: off at every launch, on only when asked, off again by itself.
+        let watcher = ControlInterruptWatcher(control: computerControl)
+        controlWatcher = watcher
+        computerControl.onChange = { [weak self] on, message in
+            self?.notch.flash(message)
+            if on { watcher.start() } else { watcher.stop() }
+        }
+        controlTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in Task { @MainActor in self?.computerControl.expireIfDue() } }
+        dispatcher.register(ComputerTool(control: computerControl, hands: LiveHands(), clearTheView: { [weak self] in
+            if self?.hud?.isShowing == true { self?.hud?.stepAside(reason: "computer control") }
+        }))
         dispatcher.register([SetDisplayModeTool(hud: hud), WelcomeHomeTool(run: { [weak self] in self?.scenes.homecoming(trigger: "voice") })])
         dispatcher.approvalHandler = { [weak self] request in await self?.conversation.requestApproval(request) ?? false }
         dispatcher.onSummary = { summary in JarvisLog.info("Action: \(summary)") }
@@ -375,6 +390,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                     memory: memory, skills: skills, local: local, narrator: narrator)
         menuBar.budget = budget
         menuBar.camera = camera
+        menuBar.computerControl = computerControl
         menuBar.voiceID = voiceID
         menuBar.keys = self
         menuBar.remote = remote

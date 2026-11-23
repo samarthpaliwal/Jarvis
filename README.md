@@ -16,7 +16,7 @@ enforced in code.
 
 - **Hands-free.** On-device wake word, on-device speech recognition, a natural on-device voice (Kokoro).
   Follow-up questions without repeating the wake word.
-- **Gets things done.** 46 tools behind one dispatcher: calendar and reminders, Gmail, Notion, Spotify and
+- **Gets things done.** 47 tools behind one dispatcher: calendar and reminders, Gmail, Notion, Spotify and
   Apple Music, files, apps, the screen and the camera, web search. Multi-step requests chain tools.
 - **Asks before anything risky.** Sending, deleting, shell commands and anything involving money need a
   spoken "yes" or a tap, in your voice. Keys, passwords, `~/.ssh` and anything on the denylist are refused
@@ -48,7 +48,7 @@ flowchart LR
         intent --> actions["4 · Actions<br/>ToolDispatcher"]
         actions --> guard{"Tier · denylist<br/>approval"}
         voiceid --> guard
-        guard --> tools["46 tools"]
+        guard --> tools["47 tools"]
         tools --> intent
         intent --> tts["5 · Text to speech<br/>Kokoro"]
     end
