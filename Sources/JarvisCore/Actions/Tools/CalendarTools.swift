@@ -262,6 +262,14 @@ public final class CalendarCancelTool: JarvisTool {
 
     public func preview(for input: JSONObject) -> String { "Cancel the event “\(input.string("title") ?? "")” \(input.string("date") ?? "today")" }
 
+    public func refusal(for input: JSONObject, context: ToolContext) async -> String? {
+        guard let resolved = try? await resolveEvent(input, calendar: calendar) else { return nil }
+        switch resolved {
+        case .failure(let r): return r.content
+        case .success(let item): return item.editable ? nil : CalendarService.CalendarError.readOnly(item.calendar).localizedDescription
+        }
+    }
+
     /// The approval names the event that will really be deleted, not just what was asked for.
     public func approvalPreview(for input: JSONObject, context: ToolContext) async -> String {
         guard let resolved = try? await resolveEvent(input, calendar: calendar), case .success(let item) = resolved else { return preview(for: input) }

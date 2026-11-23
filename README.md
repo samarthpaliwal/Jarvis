@@ -328,8 +328,9 @@ Times accept ISO 8601, `YYYY-MM-DD HH:mm`, `tomorrow 3pm`, `friday 10am`, `in 20
 4. Jarvis menu → *Integrations → Set Google OAuth Client…*, paste both (Keychain).
 5. *Integrations → Connect Gmail…* opens the browser; approve; the refresh token lands in the Keychain.
 
-Tools: `email_search` (Gmail query syntax), `email_read`, `email_draft` (creates a **draft**, never sends;
-there is no send tool at all in this build, by design). Email bodies reach Claude wrapped as untrusted content.
+Tools: `email_search` (Gmail query syntax), `email_read`, `email_draft` (creates a **draft**, never sends),
+and `email_send`, which sends a draft Jarvis created, only after your explicit yes (see *Multi-step requests
+and the confirmation gate*). Email bodies reach Claude wrapped as untrusted content.
 
 **Notion: internal integration token.** notion.so/profile/integrations → New integration → copy the
 secret → share your *Student OS // M Edition* page with the integration → Jarvis menu → *Integrations →
@@ -535,18 +536,42 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 | 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
 | 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
-| 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches`, `calendar_cancel` |
+| 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches`, `calendar_cancel`, `email_send` |
 | 3 never | denylist.json + hard-coded floor | — |
 
 Prompt-injection defence: `file_read` (and the email / web / calendar tools in Milestone 5) wrap
 their output in `<untrusted_content source=…>` tags; the system prompt tells Claude such content is
 data, never instructions, and to tell you if it tried to be. Closing tags inside the content are neutralised.
+Approvals asked after such content was read say so (see the confirmation gate above).
 
 **Adding a tool** is one file in `Actions/Tools/`: conform to `JarvisTool` (name, description, tier, JSON
 schema, `targets(for:)`, `run`), then add it to the `register([...])` list in `AppDelegate`.
 The dispatcher handles denylist, approval, logging, and the undo stack.
 
 The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
+
+## Multi-step requests and the confirmation gate
+
+"Check Friday, draft a note to Maya about it, and send it" is one request with three steps. Jarvis says
+the plan in a sentence, runs the steps in order, and stops for your yes before the one that cannot be undone.
+
+- **What needs a yes** (Tier 2): sending an email, cancelling an event, running a shell command, restarting
+  an app, clearing caches. Jarvis says exactly what it is about to do and listens for "yes" or "no" after it
+  has finished speaking; the card also has Approve and Deny. No answer in 12 seconds means no.
+- **The approval reads back the real thing.** For an email that is the recipient, subject, and opening line
+  as Gmail holds them. For an event it is the title, date, and time of the event that will be deleted.
+- **Outside content is called out.** If the request read an email, a web page, a file, or the calendar
+  before asking, the approval ends with "Note: I read an email before asking this". That is where a
+  prompt injection would have to get through, so that is where you are told.
+- **Sending is narrow.** `email_send` only sends a draft that `email_draft` created since Jarvis started.
+  A draft that was already in Gmail, or an ID that turned up inside an email, is refused before you are
+  even asked. To turn sending off, remove `email_send` from the mode's `allowedTools` in `modes.json`.
+- **If you say no, or a step fails,** the chain stops there and Jarvis says what was done and what was not.
+  A refused email stays in Drafts.
+- **Limits:** ten model rounds and sixteen tool calls per request (`tuning.llmMaxToolRounds`,
+  `tuning.toolCallBudgetPerTurn`), and the 120-second request deadline.
+- **Nothing irreversible is ever started by a briefing, a timer, or a mode change.** Only a live request from
+  you can reach an approval.
 
 ## Calendar: list, create, move, cancel
 

@@ -73,6 +73,28 @@ public final class GmailClient: @unchecked Sendable {
         return id
     }
 
+    /// Who a draft is addressed to and what it says, read back from Gmail (never from the model's memory).
+    public func draft(id: String) async throws -> DraftSummary {
+        let obj = try await get("drafts/\(id)", query: ["format": "full"])
+        let m = Self.parse(obj["message"] as? JSONObject ?? [:])
+        return DraftSummary(id: id, to: m.to, subject: m.subject, opening: String(m.body.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120)))
+    }
+
+    /// Sends an existing draft. Not repeatable: retried only when the request provably did not go through.
+    public func sendDraft(id: String) async throws {
+        let token = try await auth.token()
+        var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["id": id])
+        let (data, resp) = try await HTTP.send(req, idempotent: false)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            let obj = (try? JSONSerialization.jsonObject(with: data) as? JSONObject) ?? [:]
+            throw GoogleAuth.AuthError.server("send failed: \((obj["error"] as? JSONObject)?["message"] as? String ?? "HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)")")
+        }
+    }
+
     public func deleteDraft(id: String) async throws {
         let token = try await auth.token()
         var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/drafts/\(id)")!)
@@ -120,3 +142,23 @@ public final class GmailClient: @unchecked Sendable {
         return s.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+public struct DraftSummary: Equatable, Sendable {
+    public var id: String
+    public var to: String
+    public var subject: String
+    /// The first line or so of the body, for the approval prompt.
+    public var opening: String
+    public init(id: String, to: String, subject: String, opening: String) { self.id = id; self.to = to; self.subject = subject; self.opening = opening }
+}
+
+/// What the email tools need for drafting and sending. `GmailClient` implements it; tests use a fake.
+public protocol MailDrafting: AnyObject {
+    func createDraft(to: String, subject: String, body: String, inReplyTo: GmailClient.Message?) async throws -> String
+    func draft(id: String) async throws -> DraftSummary
+    func sendDraft(id: String) async throws
+    func deleteDraft(id: String) async throws
+    func message(id: String, full: Bool) async throws -> GmailClient.Message
+}
+
+extension GmailClient: MailDrafting {}

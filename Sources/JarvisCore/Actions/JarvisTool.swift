@@ -55,6 +55,9 @@ public protocol JarvisTool: AnyObject {
     /// The sentence the user approves. Override when it should name what will really be touched
     /// (the exact event, the real recipient) rather than repeat the input. Default: `preview(for:)`.
     @MainActor func approvalPreview(for input: JSONObject, context: ToolContext) async -> String
+    /// A reason this call cannot work at all (no such event, a draft Jarvis did not create), checked before
+    /// the user is asked to approve anything. Nil means go ahead. Only consulted for approve-first tools.
+    @MainActor func refusal(for input: JSONObject, context: ToolContext) async -> String?
     func run(input: JSONObject, context: ToolContext) async throws -> ToolResult
 }
 
@@ -65,6 +68,7 @@ public extension JarvisTool {
         return "\(name)(\(args))"
     }
     @MainActor func approvalPreview(for input: JSONObject, context: ToolContext) async -> String { preview(for: input) }
+    @MainActor func refusal(for input: JSONObject, context: ToolContext) async -> String? { nil }
     /// Claude-facing definition.
     var definition: JSONObject {
         ["name": name, "description": description, "input_schema": inputSchema]

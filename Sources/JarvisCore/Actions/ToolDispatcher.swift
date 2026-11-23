@@ -61,6 +61,24 @@ public final class ToolDispatcher {
         log.record(ActionRecord(timestamp: Date(), tool: name, tier: Tier.auto.rawValue, source: "claude-server",
                                 input: Self.describe(input), outcome: "ran", summary: nil, durationMs: nil))
         RequestTrace.current?.tool(name, ms: nil, outcome: "ran", tier: Tier.auto.rawValue)
+        if name.hasPrefix("web_") { RequestTrace.current?.markUntrusted("a web page") }
+    }
+
+    /// What kind of outside content a tool reads, in words for the approval prompt.
+    nonisolated static func kind(of tool: String) -> String {
+        if tool.hasPrefix("email") { return "an email" }
+        if tool.hasPrefix("calendar") { return "the calendar" }
+        if tool.hasPrefix("file") { return "a file" }
+        if tool.hasPrefix("notion") { return "Notion" }
+        return "outside content"
+    }
+
+    /// Prompt-injection defence at the last step: if this request read outside content before asking for
+    /// something irreversible, the approval says so, in the same breath as the action itself.
+    static func withOutsideContentNote(_ preview: String) -> String {
+        let sources = RequestTrace.current?.untrustedSources ?? []
+        guard !sources.isEmpty else { return preview }
+        return preview + ". Note: I read \(sources.joined(separator: " and ")) before asking this"
     }
 
     typealias Confirmer = @MainActor @Sendable (String) async -> Bool
@@ -129,7 +147,12 @@ public final class ToolDispatcher {
                 record("refused", tier: .approve, summary: "non-user source \(source.rawValue)")
                 return .error(DispatchError.proactiveCannotApprove(name).localizedDescription)
             }
-            let request = ApprovalRequest(toolName: name, preview: await tool.approvalPreview(for: input, context: context))
+            // Never ask for a yes to something that cannot happen.
+            if let why = await tool.refusal(for: input, context: context) {
+                record("refused", tier: .approve, summary: why)
+                return .error(why)
+            }
+            let request = ApprovalRequest(toolName: name, preview: Self.withOutsideContentNote(await tool.approvalPreview(for: input, context: context)))
             guard let handler = approvalHandler else {
                 record("denied", tier: .approve, summary: "no approval handler")
                 return .error(DispatchError.needsApproval(name).localizedDescription)
@@ -152,7 +175,7 @@ public final class ToolDispatcher {
                     record("refused", tier: .approve, summary: "confirmation not available: \(preview)")
                     return false
                 }
-                let ok = await handler(ApprovalRequest(toolName: name, preview: preview))
+                let ok = await handler(ApprovalRequest(toolName: name, preview: Self.withOutsideContentNote(preview)))
                 record(ok ? "approved" : "rejected", tier: .approve, summary: preview)
                 return ok
             }
@@ -161,6 +184,7 @@ public final class ToolDispatcher {
                     try await tool.run(input: input, context: context)
                 }
             }
+            if result.content.contains("<untrusted_content") { RequestTrace.current?.markUntrusted(Self.kind(of: name)) }
             let redacted = SecretRedactor.redact(result.content)
             if !redacted.kinds.isEmpty {
                 result.content = redacted.text

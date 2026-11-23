@@ -95,7 +95,7 @@ public struct Tuning: Codable, Equatable, Sendable {
     /// `output_config.effort` for voice turns: low | medium | high | xhigh | max.
     public var llmEffort: String = "low"
     public var llmMaxHistoryMessages: Int = 24
-    public var llmMaxToolRounds: Int = 6
+    public var llmMaxToolRounds: Int = 10
     /// A conversation is forgotten after this much inactivity.
     public var llmHistoryTimeoutMinutes: Double = 10
     /// Idle timeout between stream packets.
@@ -122,7 +122,7 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var httpRetryMaxSeconds: Double = 8
 
     // Tools
-    public var toolCallBudgetPerTurn: Int = 12
+    public var toolCallBudgetPerTurn: Int = 16
     public var localToolCallBudgetPerTurn: Int = 6
     public var webFetchMaxContentTokens: Int = 8000
     /// A Tier 2 approval that gets no answer in this long counts as "no".

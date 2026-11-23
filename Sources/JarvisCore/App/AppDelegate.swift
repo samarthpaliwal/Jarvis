@@ -163,13 +163,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         world = WorldService()
         local = OllamaClient(baseURL: URL(string: config.profile.local?.baseURL ?? "http://127.0.0.1:11434")!,
                              model: config.profile.local?.model ?? "qwen3.5:9b")
+        let drafts = DraftLedger()
         dispatcher.register([
             SystemStatusTool(), OpenAppTool(), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
             UndoLastActionTool(), ActionsTodayTool(log: actionLog),
             GetBriefingTool(service: briefing), CalendarReadTool(calendar: calendar), CalendarCreateTool(calendar: calendar),
             CalendarMoveTool(calendar: calendar), CalendarCancelTool(calendar: calendar),
-            SetReminderTool(calendar: calendar), EmailSearchTool(gmail: gmail), EmailReadTool(gmail: gmail), EmailDraftTool(gmail: gmail),
+            SetReminderTool(calendar: calendar), EmailSearchTool(gmail: gmail), EmailReadTool(gmail: gmail), EmailDraftTool(gmail: gmail, ledger: drafts), EmailSendTool(gmail: gmail, ledger: drafts),
             NotionSearchTool(client: notion), NotionCreateNoteTool(client: notion),
             SetBrightnessTool(), SetFocusTool(), RememberPlaceTool(detector: context),
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),

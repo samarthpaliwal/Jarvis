@@ -215,8 +215,9 @@ public final class MeteredModel: LanguageModel, @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let task = Task { [inner, budget] in
                 var usage = (0, 0, 0, 0), searches = 0
-                // Record whatever was used, even when the stream is cut off or fails part-way.
-                defer {
+                // Record what was used before the caller sees the stream end, so the ledger is never
+                // behind the reply. This also runs when the stream is cut off or fails part-way.
+                func settle() {
                     let usd = budget.pricing.cost(model: request.model, input: usage.0, output: usage.1, cacheRead: usage.2, cacheWrite: usage.3, webSearches: searches)
                     budget.record("claude", usd: usd)
                     RequestTrace.current?.event(.intent, "cost", ["usd": (usd * 10_000).rounded() / 10_000, "today_usd": (budget.spentToday * 100).rounded() / 100])
@@ -233,8 +234,10 @@ public final class MeteredModel: LanguageModel, @unchecked Sendable {
                         }
                         continuation.yield(event)
                     }
+                    settle()
                     continuation.finish()
                 } catch {
+                    settle()
                     continuation.finish(throwing: error)
                 }
             }

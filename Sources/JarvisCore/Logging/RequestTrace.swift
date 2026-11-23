@@ -36,6 +36,7 @@ public final class RequestTrace: @unchecked Sendable {
     private var extra: [String: Any] = [:]
     private var stagesSeen: [Stage] = []
     private var summary: [String: Any]?
+    private var outside: [String] = []
 
     public init(source: String, sink: TraceSink = .shared, id: String = RequestTrace.newID(), now: @escaping () -> Date = Date.init) {
         self.id = id
@@ -80,6 +81,15 @@ public final class RequestTrace: @unchecked Sendable {
         fields["tool"] = name
         event(.action, "tool", fields)
     }
+
+    /// Records that content from outside (an email, a web page, a file, a calendar invite) was read while
+    /// working on this request. From then on, anything that needs approval says so.
+    public func markUntrusted(_ source: String) {
+        lock.lock(); if !outside.contains(source) { outside.append(source) }; lock.unlock()
+    }
+
+    /// Kinds of outside content read so far in this request, in order.
+    public var untrustedSources: [String] { lock.lock(); defer { lock.unlock() }; return outside }
 
     /// Attaches a value to the summary line (tokens, engine, model…).
     public func set(_ key: String, _ value: Any) {
