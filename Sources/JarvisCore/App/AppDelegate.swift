@@ -19,6 +19,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var undo: UndoStack!
     public private(set) var timers: TimerService!
     public private(set) var actionLog: ActionLog!
+    private var restartedAfterCrash = false
+    private var termSource: DispatchSourceSignal?
     public private(set) var calendar: CalendarService!
     public private(set) var notion: NotionClient!
     public private(set) var googleAuth: GoogleAuth!
@@ -75,7 +77,27 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        JarvisLog.info("Jarvis starting (pid \(ProcessInfo.processInfo.processIdentifier))")
+        JarvisLog.info("Jarvis starting (pid \(ProcessInfo.processInfo.processIdentifier)\(Supervisor.isLoaded ? ", supervised by launchd" : ""))")
+        // The login item and the launchd agent can both start a copy. The second one leaves quietly;
+        // exit code 0 tells launchd not to restart it.
+        if Supervisor.anotherInstanceIsRunning {
+            JarvisLog.warn("Another Jarvis is already running; this copy is exiting")
+            exit(0)
+        }
+        let launch = Supervisor.noteLaunch()
+        if launch.crashLooping {
+            // Exit cleanly so launchd stops restarting a build that cannot start.
+            JarvisLog.error("Jarvis started more than 5 times in 2 minutes. Stopping so launchd does not keep restarting it. Check launchd.err.log and the crash reports, then start Jarvis by hand.")
+            Supervisor.noteCleanExit()
+            exit(0)
+        }
+        restartedAfterCrash = launch.afterUncleanExit
+        // `kill` (SIGTERM) is a request to quit: quit cleanly, so the supervisor does not bring Jarvis back.
+        signal(SIGTERM, SIG_IGN)
+        let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        term.setEventHandler { JarvisLog.info("SIGTERM received; quitting cleanly"); NSApp.terminate(nil) }
+        term.resume()
+        termSource = term
         if ConfigLocator.seedUserConfigIfNeeded() {
             JarvisLog.info("Seeded editable config at \(ConfigLocator.userConfigDirectory.path)")
         }
@@ -164,6 +186,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         voice.isOnline = { [weak self] in self?.brain.isOnline ?? true }
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
         conversation.onFirstWord = { [weak self] in self?.brain.prewarmIfCold() }
+        if restartedAfterCrash {
+            JarvisLog.warn("Previous run did not exit cleanly (crash or kill); restarted")
+            // Say so once the voice is ready, so a restart is never silent.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+                self?.conversation.reportFailure("I had to restart a moment ago. I'm back.")
+            }
+        }
         // Microphone trouble is said out loud, once, instead of leaving Jarvis silently deaf.
         wake.onMicHealth = { [weak self] health in
             guard let self else { return }
@@ -284,6 +313,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        Supervisor.noteCleanExit()
         wake?.stop()
         kokoro?.stop()
         JarvisLog.info("Jarvis quitting")

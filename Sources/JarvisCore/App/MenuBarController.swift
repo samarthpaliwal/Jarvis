@@ -422,8 +422,27 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             }
         }
         login.state = LaunchAtLogin.isEnabled ? .on : .off
-        login.isEnabled = LaunchAtLogin.isAvailable
+        login.isEnabled = LaunchAtLogin.isAvailable && !Supervisor.isInstalled   // the supervisor already starts it at login
         menu.addItem(login)
+
+        let keepAlive = ClosureMenuItem(title: "Keep Running (restart after a crash, start at login)", symbol: "arrow.triangle.2.circlepath") { [weak self] in
+            guard let self else { return }
+            if Supervisor.isInstalled {
+                // Remove the file only: booting the agent out would kill this running copy.
+                try? FileManager.default.removeItem(at: Supervisor.plistURL)
+                self.notch.flash("Supervisor removed. It stops for good the next time Jarvis quits.", seconds: 5)
+            } else {
+                do {
+                    // Written now, picked up by launchd at the next login (or run scripts/install-agent.sh to start it now).
+                    try Supervisor.install(executable: Bundle.main.executablePath ?? CommandLine.arguments[0], start: false)
+                    if LaunchAtLogin.isEnabled { LaunchAtLogin.set(false) }
+                    self.notch.flash("Supervisor installed. It takes over at the next login.", seconds: 5)
+                } catch { self.notch.flash("Couldn't install the supervisor: \(error.localizedDescription)", seconds: 6) }
+            }
+        }
+        keepAlive.state = Supervisor.isInstalled ? .on : .off
+        keepAlive.isEnabled = LaunchAtLogin.isAvailable
+        menu.addItem(keepAlive)
 
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Jarvis", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")

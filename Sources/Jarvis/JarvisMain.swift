@@ -6,6 +6,8 @@ import JarvisCore
 @MainActor
 struct JarvisMain {
     static func main() {
+        // `Jarvis --install-agent` and friends manage the launchd supervisor, then exit.
+        Supervisor.handleCommandLine()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

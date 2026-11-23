@@ -565,6 +565,30 @@ Jarvis answering its own voice:
 Approvals are stricter still: Jarvis starts listening for "yes" or "no" only after its own prompt has
 finished playing, and ignores anything heard while it is speaking.
 
+## Staying up: the launchd supervisor
+
+On 2026-11-22 a crash left Jarvis dead for four hours before anyone noticed. A launchd agent now starts
+Jarvis at login and restarts it after a crash.
+
+```bash
+scripts/install-agent.sh            # install and start under launchd
+scripts/install-agent.sh --status   # installed? loaded?
+scripts/uninstall-agent.sh          # remove it
+```
+
+The agent is `~/Library/LaunchAgents/com.samarth.jarvis.plist`. The menu item *Keep Running* writes or
+removes the same file.
+
+- **A crash or `kill -9`** restarts Jarvis within a second or so (never more often than every 10 s). On the
+  way back up it says "I had to restart a moment ago. I'm back."
+- **Quit from the menu, or a plain `kill`,** is a clean exit and stays quit.
+- **A crash loop** is stopped from inside: more than five starts in two minutes and Jarvis exits cleanly,
+  so launchd leaves it alone. The reason is in `jarvis.log` and `launchd.err.log`.
+- **Only one copy runs.** A second copy (the login item and the agent both firing) exits at once.
+- `scripts/run.sh` notices the agent and restarts through launchd instead of opening a second copy.
+
+To verify: `kill -9 $(pgrep -x Jarvis)`, then `pgrep -x Jarvis` shows a new process ID.
+
 ## Latency
 
 Time from the end of your sentence to Jarvis's voice has three parts. Each was measured, then fixed
