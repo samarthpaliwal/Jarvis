@@ -230,8 +230,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         camera.maxRecordingSeconds = { [weak self] in self?.config.tuning.videoMaxSeconds ?? 300 }
         camera.onNotice = { [weak self] text in self?.conversation?.announceWhenIdle(text) }
         frames = FrameSources([CameraFrameSource(session: camera.session), glasses], default: "camera")
+        // A page that opens under the full-screen HUD cannot be seen, so the HUD steps aside first.
+        let openInBrowser: @MainActor (URL) -> Bool = { [weak self] url in
+            self?.hud?.stepAside(reason: "browser")
+            return NSWorkspace.shared.open(url)
+        }
         dispatcher.register([
-            SystemStatusTool(), OpenAppTool(), GoogleSearchTool(), OpenWebsiteTool(), LightsTool(govee: GoveeClient()), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
+            SystemStatusTool(), OpenAppTool(), GoogleSearchTool(open: openInBrowser), OpenWebsiteTool(open: openInBrowser), LightsTool(govee: GoveeClient()), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
             UndoLastActionTool(), ActionsTodayTool(log: actionLog),
             GetBriefingTool(service: briefing), CalendarReadTool(calendar: calendar), CalendarCreateTool(calendar: calendar),

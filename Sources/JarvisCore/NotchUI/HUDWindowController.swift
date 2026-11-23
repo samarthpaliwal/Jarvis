@@ -22,6 +22,7 @@ public final class HUDWindowController: ObservableObject {
     private var pinnedForScene = false
     /// Bumped by every show and dismiss, so a fade-out that a new show overtook does not hide the panel.
     private var generation = 0
+    private var steppedAside = false
     /// Keep the HUD up after a conversation ends, until a click or Esc (menu toggle).
     @Published public var stayOn: Bool = UserDefaults.standard.bool(forKey: "jarvis.hudStayOn") {
         didSet {
@@ -51,7 +52,8 @@ public final class HUDWindowController: ObservableObject {
         // Follow the conversation when "always" is on.
         model.$phase.removeDuplicates().sink { [weak self] phase in
             guard let self else { return }
-            if phase != .idle, self.fullScreenAlways, !self.isShowing { self.show(scene: false) }
+            if phase == .idle { self.steppedAside = false }
+            if phase != .idle, self.fullScreenAlways, !self.isShowing, !self.steppedAside { self.show(scene: false) }
             if phase == .idle, self.isShowing { self.scheduleDismiss() }
             if phase != .idle { self.dismissTask?.cancel() }
         }.store(in: &cancellables)
@@ -90,6 +92,13 @@ public final class HUDWindowController: ObservableObject {
             }
         }
         JarvisLog.info("HUD shown (\(scene ? "scene" : "conversation")) on \(screen.localizedName)")
+    }
+
+    /// Something Sam needs to see just opened underneath (a browser page, an app being controlled): get the
+    /// HUD out of the way and keep it away for the rest of this conversation.
+    public func stepAside(reason: String) {
+        steppedAside = true
+        dismiss(reason: reason)
     }
 
     public func sceneEnded() {
