@@ -173,6 +173,9 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var remoteMaxAudioSeconds: Double = 60
     /// A remote approval that gets no answer in this long counts as "no".
     public var remoteApprovalTimeoutSeconds: Double = 60
+    /// Other web origins allowed to call the remote API from a browser, comma-separated. Empty: only the phone
+    /// app Jarvis serves itself. For a native wrapper later: "capacitor://localhost,https://localhost".
+    public var remoteAllowedOrigins: String = ""
 
     // Stability
     /// If the main thread does not respond for this many seconds, Jarvis exits so the supervisor restarts it. 0 = off.
@@ -260,6 +263,7 @@ public struct Tuning: Codable, Equatable, Sendable {
         remoteBind = try c.decodeIfPresent(String.self, forKey: .remoteBind) ?? remoteBind
         remoteMaxAudioSeconds = try c.decodeIfPresent(Double.self, forKey: .remoteMaxAudioSeconds) ?? remoteMaxAudioSeconds
         remoteApprovalTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .remoteApprovalTimeoutSeconds) ?? remoteApprovalTimeoutSeconds
+        remoteAllowedOrigins = try c.decodeIfPresent(String.self, forKey: .remoteAllowedOrigins) ?? remoteAllowedOrigins
         videoMaxSeconds = try c.decodeIfPresent(Double.self, forKey: .videoMaxSeconds) ?? videoMaxSeconds
         speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn
         followUpGuardMilliseconds = try c.decodeIfPresent(Double.self, forKey: .followUpGuardMilliseconds) ?? followUpGuardMilliseconds

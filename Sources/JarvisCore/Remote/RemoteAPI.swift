@@ -46,9 +46,36 @@ public final class RemoteAPI: @unchecked Sendable {
     public var onPaired: (@Sendable (String) -> Void)?
     public static let maxTextLength = 2000
 
+    /// Web origins other than Jarvis's own that may call the API from a browser. Empty unless configured:
+    /// the phone app is served by Jarvis and needs none. A native wrapper (Capacitor) loads the same files
+    /// from `capacitor://localhost` and would be listed here.
+    private let allowedOrigins: Set<String>
+
     public init(tokens: RemoteTokenStore, throttle: AuthThrottle = AuthThrottle(), backend: RemoteBackend,
-                pairing: PairingCodes = PairingCodes(), maxAudioSeconds: @escaping @Sendable () -> Double = { 60 }) {
-        self.tokens = tokens; self.throttle = throttle; self.backend = backend; self.pairing = pairing; self.maxAudioSeconds = maxAudioSeconds
+                pairing: PairingCodes = PairingCodes(), allowedOrigins: Set<String> = [], maxAudioSeconds: @escaping @Sendable () -> Double = { 60 }) {
+        self.tokens = tokens; self.throttle = throttle; self.backend = backend; self.pairing = pairing
+        self.allowedOrigins = allowedOrigins; self.maxAudioSeconds = maxAudioSeconds
+    }
+
+    /// Reads the `remoteAllowedOrigins` setting: exact origins separated by commas or spaces. "*" is never accepted.
+    public static func origins(from setting: String) -> Set<String> {
+        Set(setting.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map { $0.lowercased() }
+            .filter { $0 != "*" && $0 != "null" && $0.contains("://") && !$0.hasSuffix("/") })
+    }
+
+    private func corsOrigin(_ r: HTTPRequest) -> String? {
+        guard let origin = r.headers["origin"]?.lowercased(), allowedOrigins.contains(origin) else { return nil }
+        return origin
+    }
+    private func isPreflight(_ r: HTTPRequest) -> Bool {
+        r.method == "OPTIONS" && corsOrigin(r) != nil && r.headers["access-control-request-method"] != nil
+    }
+    private func withCORS(_ response: HTTPResponse, for request: HTTPRequest) -> HTTPResponse {
+        guard let origin = corsOrigin(request) else { return response }
+        var r = response
+        r.headers["Access-Control-Allow-Origin"] = origin
+        r.headers["Vary"] = "Origin"
+        return r
     }
 
     /// The two things reachable without a token: the phone app's own static files, and redeeming a pairing
@@ -60,6 +87,11 @@ public final class RemoteAPI: @unchecked Sendable {
     // MARK: Authentication (runs on the headers, before any body is read)
 
     public func precheck(_ head: HTTPRequest, from ip: String) -> HTTPResponse? {
+        if isPreflight(head) { return nil }
+        return check(head, from: ip).map { withCORS($0, for: head) }
+    }
+
+    private func check(_ head: HTTPRequest, from ip: String) -> HTTPResponse? {
         if isShell(head) { return nil }
         if let wait = throttle.retryAfter(ip) {
             return .error(429, "too_many_attempts", "Too many wrong tokens from this device. Try again later.", headers: ["Retry-After": String(wait)])
@@ -85,6 +117,16 @@ public final class RemoteAPI: @unchecked Sendable {
     // MARK: Routes
 
     public func handle(_ request: HTTPRequest, from ip: String) async -> HTTPResponse {
+        if isPreflight(request) {
+            // A browser asking whether a listed origin may send a token. It carries none itself and runs nothing.
+            return withCORS(HTTPResponse(status: 204, headers: ["Access-Control-Allow-Methods": "GET, POST",
+                                                                 "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                                                                 "Access-Control-Max-Age": "600"]), for: request)
+        }
+        return withCORS(await route(request, from: ip), for: request)
+    }
+
+    private func route(_ request: HTTPRequest, from ip: String) async -> HTTPResponse {
         if isShell(request) { return WebApp.response(for: request.path) ?? .error(404, "not_found", "The app's files are missing from this build.") }
         if isPairing(request) { return pair(request, from: ip) }
         // Never rely on the precheck having run: no token, no answer.

@@ -196,6 +196,7 @@
     "remoteBind": "tailscale",
     "remoteMaxAudioSeconds": 60,
     "remoteApprovalTimeoutSeconds": 60,
+    "remoteAllowedOrigins": "",
     "hangTimeoutSeconds": 30,
     "speakerThreshold": 0.5,
     "unverifiedVoiceApproval": "button"

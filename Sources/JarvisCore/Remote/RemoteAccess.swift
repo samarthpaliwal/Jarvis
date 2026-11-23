@@ -51,7 +51,8 @@ public final class RemoteAccess {
         self.defaults = defaults
         self.addresses = addresses
         let maxAudio = config.tuning.remoteMaxAudioSeconds
-        self.api = RemoteAPI(tokens: tokens, backend: backend, maxAudioSeconds: { maxAudio })
+        self.api = RemoteAPI(tokens: tokens, backend: backend, allowedOrigins: RemoteAPI.origins(from: config.tuning.remoteAllowedOrigins),
+                             maxAudioSeconds: { maxAudio })
         api.onPaired = { [weak self] name in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.refresh(); self?.onPaired?(name); self?.onChange?() } }
         }

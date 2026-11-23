@@ -710,9 +710,15 @@ final class WebAppTests: XCTestCase {
         XCTAssertFalse(html.contains("style=\""), "inline styles are blocked by the policy")
         XCTAssertFalse(html.range(of: #"<script(?![^>]*\bsrc=)"#, options: .regularExpression) != nil, "inline scripts are blocked by the policy")
         XCTAssertFalse(html.range(of: #"\son[a-z]+=\""#, options: .regularExpression) != nil, "inline event handlers are blocked by the policy")
-        for (name, text) in [("index.html", html), ("app.js", js), ("app.css", css), ("sw.js", sw)] {
-            XCTAssertFalse(text.contains("http://") || text.contains("https://") || text.contains("//cdn"), "\(name) must not load or contact anything but its own origin")
+        for (name, text) in [("index.html", html), ("app.css", css)] {
+            XCTAssertFalse(text.contains("http://") || text.contains("https://") || text.contains("//cdn"), "\(name) must not load anything but its own files")
         }
+        for (name, text) in [("app.js", js), ("sw.js", sw)] {
+            XCTAssertNil(text.range(of: #"(fetch|importScripts|import|Worker)\s*\(\s*["'`]\s*(https?:)?//"#, options: .regularExpression), "\(name) must not contact a fixed outside address")
+            XCTAssertFalse(text.contains("//cdn"), name)
+        }
+        XCTAssertTrue(js.contains("fetch(server + path"), "one place talks to the network, and only to the Mac")
+        XCTAssertEqual(js.components(separatedBy: "fetch(").count - 1, 1, "app.js has exactly one fetch")
         XCTAssertFalse(js.contains("innerHTML"), "text from the Mac is shown as text, never as markup")
         XCTAssertFalse(js.contains("eval("))
         // Everything the page, the manifest and the service worker refer to is actually served.
@@ -861,6 +867,32 @@ final class PairingTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(120))
         let r = await post("/v1/pair", ["code": offer.code])
         XCTAssertEqual(r.status, 401); XCTAssertTrue(store.isEmpty)
+    }
+
+    func testOtherWebOriginsAreRefusedUnlessListed() async {
+        XCTAssertEqual(RemoteAPI.origins(from: " capacitor://localhost, https://localhost  *  null https://x.example/ "), ["capacitor://localhost", "https://localhost"])
+        XCTAssertTrue(RemoteAPI.origins(from: "").isEmpty)
+        func preflight(_ api: RemoteAPI, origin: String) async -> HTTPResponse {
+            let r = HTTPRequest(method: "OPTIONS", path: "/v1/ask", headers: ["origin": origin, "access-control-request-method": "POST", "access-control-request-headers": "authorization"])
+            if let refused = api.precheck(r, from: "100.64.0.2") { return refused }
+            return await api.handle(r, from: "100.64.0.2")
+        }
+        // By default no other origin may use the API from a browser.
+        let closed = await preflight(api, origin: "capacitor://localhost")
+        XCTAssertEqual(closed.status, 401); XCTAssertNil(closed.headers["Access-Control-Allow-Origin"])
+
+        let open = RemoteAPI(tokens: store, backend: FakeRemoteBackend(), allowedOrigins: RemoteAPI.origins(from: "capacitor://localhost"))
+        let allowed = await preflight(open, origin: "capacitor://localhost")
+        XCTAssertEqual(allowed.status, 204); XCTAssertEqual(allowed.headers["Access-Control-Allow-Origin"], "capacitor://localhost")
+        XCTAssertTrue(allowed.headers["Access-Control-Allow-Headers"]?.contains("Authorization") ?? false)
+        let stranger = await preflight(open, origin: "https://evil.example")
+        XCTAssertEqual(stranger.status, 401); XCTAssertNil(stranger.headers["Access-Control-Allow-Origin"])
+        // Being a listed origin is not a token.
+        let noToken = open.precheck(HTTPRequest(method: "GET", path: "/v1/status", headers: ["origin": "capacitor://localhost"]), from: "100.64.0.2")
+        XCTAssertEqual(noToken?.status, 401); XCTAssertEqual(noToken?.headers["Access-Control-Allow-Origin"], "capacitor://localhost", "so the app can read why it was refused")
+        let token = try! store.create(name: "wrapped app")
+        let ok = await open.handle(HTTPRequest(method: "GET", path: "/v1/status", headers: ["origin": "capacitor://localhost", "authorization": "Bearer \(token)"]), from: "100.64.0.2")
+        XCTAssertEqual(ok.status, 200); XCTAssertEqual(ok.headers["Access-Control-Allow-Origin"], "capacitor://localhost"); XCTAssertEqual(ok.headers["Vary"], "Origin")
     }
 
     func testTheShellIsPublicButNothingElseIs() async {

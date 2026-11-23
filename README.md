@@ -691,6 +691,25 @@ the page's recorder. The recorder's resampling and WAV encoding are tested under
 decoder. Not yet tried: a real phone, the microphone in a browser, Add to Home Screen, and the service
 worker (the test browser does not run service workers).
 
+### Later: a real app icon (Capacitor)
+
+Not built. The pieces are in place so that wrapping the same web app in a native shell is packaging, not
+a rewrite:
+
+- **The web app is one self-contained folder**, `Sources/JarvisCore/Resources/WebApp/`: no build step, no
+  dependencies. That folder is what Capacitor calls `webDir`.
+- **It can be told where the Mac is.** Loaded from inside a native shell (`capacitor://localhost`) instead
+  of from the Mac, the pairing screen shows one more field for the Mac's Tailscale address and every
+  request goes there.
+- **The API can admit that origin.** `remoteAllowedOrigins` (empty by default) lists exact extra web
+  origins that may call the API from a browser, for example `capacitor://localhost,https://localhost`.
+  A listed origin still needs a token for everything; `*` is never accepted.
+- A native shell also removes the HTTPS requirement for the microphone, because the app's own pages are
+  not `http://`.
+
+When the time comes: `npm init @capacitor/app`, point `webDir` at that folder, add the iOS and Android
+platforms, add the microphone usage string, and set `JARVIS_REMOTE_ALLOWED_ORIGINS`.
+
 **Check it**
 
 ```bash
@@ -699,7 +718,7 @@ swift test --filter "Remote|HTTP|AudioCodec|Tailnet|WebApp|Pairing"   # API, tok
 ```
 
 Settings (`profile.json → tuning`, or `JARVIS_…` in `jarvis.env`): `remotePort` 8787, `remoteBind`
-`tailscale`, `remoteMaxAudioSeconds` 60, `remoteApprovalTimeoutSeconds` 60.
+`tailscale`, `remoteMaxAudioSeconds` 60, `remoteApprovalTimeoutSeconds` 60, `remoteAllowedOrigins` empty.
 
 ## Keys: Touch ID instead of the keychain password
 

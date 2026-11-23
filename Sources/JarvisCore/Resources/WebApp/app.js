@@ -84,13 +84,23 @@ if (typeof module !== "undefined" && module.exports) module.exports = JarvisAudi
 if (typeof document !== "undefined") (() => {
   const $ = (id) => document.getElementById(id);
   const app = $("app");
-  const TOKEN_KEY = "jarvis.token", SPEAK_KEY = "jarvis.speak";
+  const TOKEN_KEY = "jarvis.token", SPEAK_KEY = "jarvis.speak", SERVER_KEY = "jarvis.server";
 
   const store = {
     get(key) { try { return localStorage.getItem(key); } catch { return null; } },
     set(key, value) { try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch { /* private mode */ } },
   };
   let token = store.get(TOKEN_KEY);
+  // Hook for a native wrapper (Capacitor): there these files load from inside the app, not from the Mac, so the
+  // app has to be told where the Mac is. Served by Jarvis itself, `server` stays empty and everything is same-origin.
+  const wrapped = location.protocol === "capacitor:" || location.protocol === "file:" || typeof window.Capacitor !== "undefined";
+  let server = wrapped ? (store.get(SERVER_KEY) || "") : "";
+  const normalizeServer = (raw) => {
+    let s = raw.trim();
+    if (!s) return "";
+    if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+    return s.endsWith("/") ? s : s + "/";
+  };
   let device = "";
   let pendingApproval = null;
   let audioContext = null, playing = null, recorder = null;
@@ -107,7 +117,7 @@ if (typeof document !== "undefined") (() => {
     if (auth) headers.Authorization = "Bearer " + token;
     if (type) headers["Content-Type"] = type;
     let response;
-    try { response = await fetch(path, { method, headers, body, cache: "no-store", credentials: "omit" }); }
+    try { response = await fetch(server + path, { method, headers, body, cache: "no-store", credentials: "omit" }); }
     catch { throw new ApiError(0, "unreachable", "Can't reach your Mac. Is Tailscale on, and is the Mac awake?"); }
     let data = {};
     try { data = await response.json(); } catch { /* not JSON */ }
@@ -133,6 +143,8 @@ if (typeof document !== "undefined") (() => {
     pendingApproval = null;
     setLink("down", "Not paired");
     $("pair-error").textContent = message || "";
+    $("pair-server").hidden = !wrapped;
+    if (wrapped && server) $("pair-server").value = server;
     show("pair");
     $("pair-code").focus();
   }
@@ -162,6 +174,10 @@ if (typeof document !== "undefined") (() => {
     const entered = $("pair-code").value.trim();
     $("pair-error").textContent = "";
     if (!entered) return;
+    if (wrapped) {
+      server = normalizeServer($("pair-server").value);
+      if (!server) { $("pair-error").textContent = "Enter your Mac's Tailscale address first."; return; }
+    }
     try {
       if (/^jrv_[A-Za-z0-9_-]{20,}$/.test(entered)) {
         token = entered;                       // a token made with "Create Access Token…"
@@ -173,6 +189,7 @@ if (typeof document !== "undefined") (() => {
         token = paired.token;
       }
       store.set(TOKEN_KEY, token);
+      if (wrapped) store.set(SERVER_KEY, server);
       $("pair-code").value = "";
       setState("loading");
       await refreshStatus();

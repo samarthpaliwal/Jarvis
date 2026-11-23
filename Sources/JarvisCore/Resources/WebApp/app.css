@@ -18,6 +18,7 @@ section { flex: 1; display: flex; flex-direction: column; }
 #pair { justify-content: center; gap: 4px; }
 #pair h1 { font-size: 26px; margin: 0 0 4px; }
 #pair p { color: var(--muted); margin: 0 0 14px; }
+#pair-server { margin-bottom: 10px; }
 #pair-form { display: flex; gap: 10px; }
 #pair-code { font-size: 24px; letter-spacing: 6px; text-align: center; }
 .error { color: var(--bad); min-height: 1.4em; }
