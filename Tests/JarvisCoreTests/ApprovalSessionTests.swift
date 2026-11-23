@@ -75,6 +75,26 @@ final class ApprovalSessionTests: XCTestCase {
         XCTAssertEqual(asked.count, 2)
     }
 
+    func testBothExtraLimitsCanBeSwitchedOffAndTheMacAndPhoneStaySeparate() async {
+        dispatcher.approvalSession = ApprovalSession(enabled: true, coversOutsideContent: true, coversPhone: true)
+        let tainted = RequestTrace(source: "text", sink: TraceSink(file: nil))
+        tainted.markUntrusted("the screen")
+        _ = await RequestTrace.$current.withValue(tainted) { await call("send_thing") }
+        _ = await RequestTrace.$current.withValue(tainted) { await call("send_thing") }
+        XCTAssertEqual(asked.count, 1, "loosened: one yes covers a request that read the screen")
+        _ = await RequestTrace.$current.withValue(tainted) { await call("shell_thing") }
+        XCTAssertEqual(asked.count, 2, "still one yes per kind of action")
+
+        let remote = RequestTrace(source: "remote", sink: TraceSink(file: nil))
+        _ = await RequestTrace.$current.withValue(remote) { await call("send_thing") }
+        XCTAssertEqual(asked.count, 3, "a yes at the Mac is not a yes on the phone")
+        _ = await RequestTrace.$current.withValue(remote) { await call("send_thing") }
+        XCTAssertEqual(asked.count, 3, "loosened: the phone's own yes covers the phone")
+        clock += 121
+        _ = await RequestTrace.$current.withValue(remote) { await call("send_thing") }
+        XCTAssertEqual(asked.count, 4, "two quiet minutes still end it")
+    }
+
     func testInterruptingThroughTheSpeakersNeedsThreeWords() {
         let spoken = "The weather in Tucson is sunny with a high of twenty four"
         XCTAssertFalse(ConversationController.isGenuineInterruption(heard: "wait stop", spoken: spoken, minimumWords: 3))

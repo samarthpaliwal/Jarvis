@@ -437,6 +437,13 @@ minutes. What it never covers, so these still ask every time:
 - anything asked from the phone,
 - a different kind of action: a yes to sending an email is not a yes to running a shell command.
 
+The first two of those are switches of their own under the menu item ("…even after reading an email, page,
+file, or the screen" and "…for requests from the phone too"). With the first one on, a hidden instruction in
+an email or on a web page can make Jarvis repeat a kind of action you already said yes to in that chat,
+without asking: for example a second email, sent somewhere you did not choose. Turn it on knowing that.
+A yes at the Mac never covers the phone or the other way round, so the phone's first yes in a chat still
+goes through its voice check.
+
 Every action is still logged, including the ones an earlier yes covered.
 
 **Cutting in.** `JARVIS_SPEECH_BARGE_IN=always` in `jarvis.env` lets you interrupt by just talking, through

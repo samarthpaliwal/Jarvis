@@ -41,7 +41,8 @@ public final class ToolDispatcher {
     public private(set) var tools: [String: JarvisTool] = [:]
     public var approvalHandler: ((ApprovalRequest) async -> Bool)?
     /// "Ask once per chat" (menu toggle). See ApprovalSession for what it never covers.
-    public var approvalSession = ApprovalSession(enabled: UserDefaults.standard.bool(forKey: ApprovalSession.key))
+    public var approvalSession = ApprovalSession.saved()
+    private var askedFromPhone: Bool { RequestTrace.current?.source == "remote" }
     var now: () -> Date = Date.init
 
     /// True when an earlier yes in this chat already covers this kind of action.
@@ -181,7 +182,7 @@ public final class ToolDispatcher {
                 return .error(DispatchError.rejected(name).localizedDescription)
             }
             record("approved", tier: .approve, summary: request.preview)
-            approvalSession.grant(name, at: now())
+            approvalSession.grant(name, at: now(), fromPhone: askedFromPhone)
             }
         }
         do {
@@ -201,7 +202,7 @@ public final class ToolDispatcher {
                 }
                 let ok = await handler(ApprovalRequest(toolName: name, preview: Self.withOutsideContentNote(preview)))
                 record(ok ? "approved" : "rejected", tier: .approve, summary: preview)
-                if ok { self.approvalSession.grant(name, at: self.now()) }
+                if ok { self.approvalSession.grant(name, at: self.now(), fromPhone: self.askedFromPhone) }
                 return ok
             }
             var result = try await Self.$confirmer.withValue(ask) {

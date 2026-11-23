@@ -651,6 +651,24 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         }
         once.state = (dispatcher?.approvalSession.enabled ?? false) ? .on : .off
         menu.addItem(once)
+        if dispatcher?.approvalSession.enabled == true {
+            let outside = ClosureMenuItem(title: "   …even after reading an email, page, file, or the screen", symbol: "exclamationmark.shield") { [dispatcher, notch] in
+                dispatcher?.approvalSession.coversOutsideContent.toggle()
+                let on = dispatcher?.approvalSession.coversOutsideContent ?? false
+                UserDefaults.standard.set(on, forKey: ApprovalSession.outsideKey)
+                notch.flash(on ? "One yes also covers requests that read outside content" : "Requests that read outside content ask every time")
+            }
+            outside.state = (dispatcher?.approvalSession.coversOutsideContent ?? false) ? .on : .off
+            menu.addItem(outside)
+            let phone = ClosureMenuItem(title: "   …for requests from the phone too", symbol: "iphone") { [dispatcher, notch] in
+                dispatcher?.approvalSession.coversPhone.toggle()
+                let on = dispatcher?.approvalSession.coversPhone ?? false
+                UserDefaults.standard.set(on, forKey: ApprovalSession.phoneKey)
+                notch.flash(on ? "One yes per chat on the phone too" : "The phone asks every time")
+            }
+            phone.state = (dispatcher?.approvalSession.coversPhone ?? false) ? .on : .off
+            menu.addItem(phone)
+        }
         if let radar {
             let sub = NSMenu()
             let line = NSMenuItem(title: radar.statusLine, action: nil, keyEquivalent: ""); line.isEnabled = false; sub.addItem(line)
