@@ -49,7 +49,10 @@ public final class HangWatchdog: @unchecked Sendable {
         if shouldFire { fired = true }
         lock.unlock()
         if shouldFire { onHang(silent) }
-        DispatchQueue.main.async { [weak self] in self?.pong() }
+        // Ask the run loop, not the main dispatch queue: a modal dialog opened from a main-queue block stalls
+        // that queue while the app is perfectly alive (this restarted Jarvis mid-pairing on 2026-11-23).
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.pong() }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
         return silent
     }
 }

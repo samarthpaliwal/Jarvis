@@ -752,9 +752,13 @@ extension MenuBarController {
             _ = failed.runFocusedModal()
             return
         }
-        Task { @MainActor in
-            let name = await Task.detached { Tailnet.dnsName() }.value
+        // The dialog must not be opened from inside a Task or a main-queue block: a modal loop running there
+        // stalls everything else queued for the main thread (the API included) until it is dismissed, and the
+        // hang watchdog then restarts Jarvis. Look the name up in the background, then open it from the run loop.
+        Task.detached {
+            let name = Tailnet.dnsName()
             try? await Task.sleep(for: .milliseconds(300))      // let the listener come up so the address is known
+            RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated {
             var lines: [String] = []
             switch remote.state {
             case .listening(let host, let port) where Tailnet.isLoopback(host):
@@ -774,6 +778,8 @@ extension MenuBarController {
             show.informativeText = lines.joined(separator: "\n\n")
             show.addButton(withTitle: "Done"); show.addButton(withTitle: "Cancel Pairing")
             if show.runFocusedModal() == .alertSecondButtonReturn { remote.cancelPairing() }
+            } }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
     }
 
