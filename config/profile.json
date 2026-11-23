@@ -192,7 +192,9 @@
     "sessionMemoryMinutes": 30,
     "sessionMemoryExchanges": 6,
     "videoMaxSeconds": 300,
-    "hangTimeoutSeconds": 30
+    "hangTimeoutSeconds": 30,
+    "speakerThreshold": 0.5,
+    "unverifiedVoiceApproval": "button"
   },
   "pricing": {
     "_comment": "US dollars. Model prices are per million tokens (Anthropic list prices, 2026-11-03); the longest matching prefix wins. Speech prices are estimates per 1,000 characters: set your plan's real rate.",

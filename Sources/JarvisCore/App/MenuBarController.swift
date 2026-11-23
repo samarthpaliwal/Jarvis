@@ -22,6 +22,9 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var budget: Budget?
     /// Set by the app; adds the Camera submenu.
     public var camera: CameraController?
+    /// Set by the app; adds the Voice ID submenu.
+    public var voiceID: SpeakerVerifier?
+    public var onEnrollVoice: (() -> Void)?
     private let googleAuth: GoogleAuth
     private let notion: NotionClient
     private let briefing: BriefingService
@@ -230,6 +233,30 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         integItem.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         integItem.submenu = integ
         menu.addItem(integItem)
+        if let voiceID {
+            let enrolled = voiceID.voiceprint
+            let item = NSMenuItem(title: "Voice ID", action: nil, keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "person.wave.2", accessibilityDescription: nil)
+            let sub = NSMenu()
+            let status = NSMenuItem(title: enrolled.map { "On · \($0.samples) recordings · needs \(String(format: "%.2f", voiceID.threshold))" } ?? "Not set up", action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            sub.addItem(status)
+            if let c = conversation.lastVoiceCheck, c.isEnforced {
+                let last = NSMenuItem(title: "Last request: \(c.outcome.rawValue)" + (c.score.map { String(format: " (%.2f)", $0) } ?? ""), action: nil, keyEquivalent: "")
+                last.isEnabled = false
+                sub.addItem(last)
+            }
+            sub.addItem(.separator())
+            sub.addItem(ClosureMenuItem(title: enrolled == nil ? "Set Up Voice ID…" : "Redo Voice ID…", symbol: "mic") { [weak self] in self?.onEnrollVoice?() })
+            let forget = ClosureMenuItem(title: "Forget My Voice", symbol: "trash") { [notch] in
+                voiceID.forget()
+                notch.flash("Voiceprint deleted. Voice ID is off.", seconds: 4)
+            }
+            forget.isEnabled = enrolled != nil
+            sub.addItem(forget)
+            item.submenu = sub
+            menu.addItem(item)
+        }
         if let camera {
             let cam = NSMenuItem(title: "Camera", action: nil, keyEquivalent: "")
             cam.image = NSImage(systemSymbolName: "video", accessibilityDescription: nil)

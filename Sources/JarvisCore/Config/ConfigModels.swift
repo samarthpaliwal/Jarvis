@@ -355,7 +355,8 @@ public struct Denylist: Codable, Equatable, Sendable {
 
     /// The hard floor: even if denylist.json is deleted, these stay denied.
     public static let fallback = Denylist(
-        paths: ["~/.ssh", "~/Library/Keychains", "~/.aws", "~/.gnupg", "/System", "/Library", "/private", "/etc", "/usr"],
+        paths: ["~/.ssh", "~/Library/Keychains", "~/.aws", "~/.gnupg", "/System", "/Library", "/private", "/etc", "/usr",
+                "~/Library/Application Support/Jarvis/voiceprint"],   // biometric: no tool may read it
         filePatterns: [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "credentials.json"],
         apps: ["Keychain Access", "1Password", "Passwords"],
         shellPatterns: ["sudo", "rm -rf /", "mkfs", "csrutil", "security ", "| sh", "| bash"]

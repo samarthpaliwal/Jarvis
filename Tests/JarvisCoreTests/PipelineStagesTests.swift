@@ -40,8 +40,11 @@ final class FakeIntent: IntentEngine {
     var error: Error?
     /// Simulates a model or tool that never answers and ignores cancellation.
     var hangs = false
+    /// Runs in the middle of answering, the way a tool that needs approval does.
+    var duringReply: (@MainActor () async -> Void)?
     func respond(to text: String, onText: @escaping (String) -> Void) async throws -> Reply {
         heard.append(text)
+        await duringReply?()
         if hangs { for _ in 0..<600 { try? await Task.sleep(for: .milliseconds(50)) } }
         if let error { throw error }
         onText(reply)
@@ -66,9 +69,9 @@ final class FakeSpeech: SpeechOutput {
 @MainActor
 final class PipelineStagesTests: XCTestCase {
     func makeController(_ wake: FakeWake, _ stt: FakeTranscriber, _ intent: FakeIntent, _ speech: FakeSpeech,
-                        env: [String: String] = [:]) -> ConversationController {
+                        env: [String: String] = [:], notch: NotchViewModel? = nil) -> ConversationController {
         let config = ConfigStore(directory: ConfigTests.repoConfigDir, env: env)
-        let notch = NotchViewModel()
+        let notch = notch ?? NotchViewModel()
         let c = ConversationController(notch: notch, wake: wake, transcriber: stt, speech: speech, config: config,
                                        modes: ModeManager(config: config, notch: notch), brain: intent)
         c.conversationMode = false      // no follow-up listen: the test ends at idle

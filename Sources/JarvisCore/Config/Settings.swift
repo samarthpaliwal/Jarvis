@@ -156,6 +156,13 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var sessionMemoryMinutes: Double = 30
     public var sessionMemoryExchanges: Int = 6
 
+    // Voice ID
+    /// How alike a voice must be to the enrolled one to count as verified (0…1). Higher is stricter.
+    public var speakerThreshold: Double = 0.5
+    /// When the voice is not verified and an action needs approval: "button" (approve on screen instead)
+    /// or "never" (refuse).
+    public var unverifiedVoiceApproval: String = "button"
+
     // Stability
     /// If the main thread does not respond for this many seconds, Jarvis exits so the supervisor restarts it. 0 = off.
     public var hangTimeoutSeconds: Double = 30
@@ -235,6 +242,8 @@ public struct Tuning: Codable, Equatable, Sendable {
         cachePrewarmAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .cachePrewarmAfterSeconds) ?? cachePrewarmAfterSeconds
         sessionMemoryMinutes = try c.decodeIfPresent(Double.self, forKey: .sessionMemoryMinutes) ?? sessionMemoryMinutes
         sessionMemoryExchanges = try c.decodeIfPresent(Int.self, forKey: .sessionMemoryExchanges) ?? sessionMemoryExchanges
+        speakerThreshold = try c.decodeIfPresent(Double.self, forKey: .speakerThreshold) ?? speakerThreshold
+        unverifiedVoiceApproval = try c.decodeIfPresent(String.self, forKey: .unverifiedVoiceApproval) ?? unverifiedVoiceApproval
         hangTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .hangTimeoutSeconds) ?? hangTimeoutSeconds
         videoMaxSeconds = try c.decodeIfPresent(Double.self, forKey: .videoMaxSeconds) ?? videoMaxSeconds
         speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn

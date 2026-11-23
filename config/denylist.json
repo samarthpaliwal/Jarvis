@@ -21,6 +21,7 @@
     "~/Library/Application Support/Bitwarden",
     "~/Library/Application Support/Claude",
     "~/.claude",
+    "~/Library/Application Support/Jarvis/voiceprint",
     "/System",
     "/Library",
     "/private",

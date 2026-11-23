@@ -100,6 +100,9 @@ Sources/JarvisCore/
   Integrations/            EventKit calendar/reminders, Google OAuth + Gmail, Notion API, briefing, weather
   Context/                 Signals (location, Wi-Fi, power, displays, calendar), mode scorer and setup
   Proactive/               Scheduler (morning briefing, nudges, breaks, battery), call detection
+  Vision/                  Camera session, live feed, photo and video, frame sources (camera, glasses hook)
+  VoiceID/                 Speaker verification: filterbank features, ECAPA-TDNN, voiceprint, enrollment, gate
+  Net/                     HTTP retries and timeouts, spend guard
   Memory/  Skills/  Music/ Long-term memory, skills, Spotify and Music control
   Resources/Models/        melspectrogram / embedding / hey_jarvis ONNX models (Apache-2.0)
 Tests/JarvisCoreTests/     Unit tests (`swift test`)
@@ -552,6 +555,63 @@ The dispatcher handles denylist, approval, logging, and the undo stack.
 
 The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
 
+## Voice ID: checking it is you
+
+With Voice ID set up, Jarvis checks whose voice made each spoken request, and anything that needs approval
+is gated on the result.
+
+**Setup** (about a minute). Install the model once, then enroll:
+
+```bash
+scripts/setup-voiceid.sh        # 24.9 MB model, verified by checksum
+```
+
+Then choose *Voice ID → Set Up Voice ID…* in the menu, or say "set up Voice ID". Jarvis shows five sentences;
+after each tone you read the one on screen. If a sentence is missed it asks again, and if the recordings do
+not sound like one voice nothing is saved.
+
+**Which model, and why.** Three were considered:
+
+| Option | For | Against |
+|--------|-----|---------|
+| **ECAPA-TDNN** (chosen) | The most accurate of the three (0.88% error on VoxCeleb1), free, and it runs in the ONNX Runtime Jarvis already ships for the wake word, so nothing new runs in the background | A 25 MB model file to download |
+| Picovoice Eagle | Easiest to integrate, small | Needs a Picovoice account and access key, and the free tier is metered |
+| Resemblyzer | Simple | Older and less accurate, and needs a Python process running next to Jarvis |
+
+The model is the WeSpeaker project's ECAPA-TDNN trained on VoxCeleb (CC-BY-4.0), published as ONNX. Features
+are computed in Swift ([VoiceID/Fbank.swift](Sources/JarvisCore/VoiceID/Fbank.swift)) and match a Python
+reference above 0.999. One check takes about 90 ms.
+
+**At run time.** The audio of each spoken request, "Hey Jarvis" included, is compared with your voiceprint.
+The result is a score from 0 to 1; `tuning.speakerThreshold` (0.5) or more counts as you.
+
+| The request was… | A spoken "yes" | The Approve button | A spoken "no" |
+|---|---|---|---|
+| Spoken, and verified as you | Counts | Counts | Counts |
+| Spoken, not verified (another voice, or too little speech) | Ignored | Counts | Counts |
+| Typed | Ignored | Counts | Counts |
+| Anything, with `tuning.unverifiedVoiceApproval` set to `never` | Refused outright | Refused | n/a |
+
+When the voice is not verified, Jarvis says so: "I couldn't verify your voice, so approve it on screen: …".
+This applies to everything that needs approval: sending email, cancelling events, shell commands, moving an
+event other people are invited to, and the camera after outside content. Replacing or deleting the voiceprint
+by voice needs an approval too, so someone else cannot take the gate over.
+
+**Local only.**
+- The voiceprint is 192 numbers in `~/Library/Application Support/Jarvis/voiceprint/voiceprint.json`,
+  readable only by your user (folder 0700, file 0600).
+- No audio is stored. Enrollment recordings and each request's audio are held in RAM and dropped after use.
+- Nothing is sent anywhere: the model runs on this Mac and the voiceprint is never in a request or a log.
+  Logs carry only the score.
+- The folder is on the hard-coded denylist, so no tool can read it, and it is in `.gitignore`.
+- *Voice ID → Forget My Voice* deletes it.
+
+**What it is not.** Voice ID tells voices apart; it does not prove a voice is live. A good recording or a
+clone of your voice could pass. Treat it as a second check on top of the approval, not as a lock. The scores
+from the synthetic test voices (same voice 0.68 to 0.92, another voice at most 0.39) are cleaner than a real
+room will be; after enrolling, watch *Voice ID → Last request* for a few days and adjust the threshold if
+you are being rejected or the margin looks thin.
+
 ## Vision: looking on demand
 
 "Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.
@@ -857,6 +917,15 @@ Unit tests write to a temporary folder, never to these files.
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.12.0 — Camera, and upgrade phase 4: Voice ID (2026-11-23)
+- **Camera:** live feed window, video and photo capture to `~/Movies/Jarvis` and `~/Pictures/Jarvis`. A
+  recording is only possible while the feed is visible.
+- **Voice ID:** ECAPA-TDNN speaker verification on-device; guided five-sentence enrollment; approvals are
+  gated on the request being in your voice, with the Approve button as the fallback.
+- **Stability:** fixed a deadlock when the camera closed; a watchdog now restarts Jarvis if its main thread
+  freezes for 30 seconds.
+- 285 tests.
 
 ### 0.11.0 — Upgrade phase 3: features (2026-11-22)
 - **Calendar:** `calendar_move` (undoable) and `calendar_cancel` (always approved). Events are found by

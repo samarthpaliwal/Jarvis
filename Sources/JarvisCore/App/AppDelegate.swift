@@ -25,6 +25,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var contacts: ContactBook!
     public private(set) var frames: FrameSources!
     public private(set) var camera: CameraController!
+    public private(set) var voiceID: SpeakerVerifier!
+    private var enrollmentPending = false
     public private(set) var glasses: PushedFrameSource!
     private var termSource: DispatchSourceSignal?
     public private(set) var calendar: CalendarService!
@@ -169,6 +171,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         local = OllamaClient(baseURL: URL(string: config.profile.local?.baseURL ?? "http://127.0.0.1:11434")!,
                              model: config.profile.local?.model ?? "qwen3.5:9b")
         let drafts = DraftLedger()
+        // Voice ID: the model is read from disk only when a voiceprint exists or setup starts.
+        let embedder = LazyECAPAEmbedder()
+        voiceID = SpeakerVerifier(embedder: embedder, threshold: config.tuning.speakerThreshold)
+        JarvisLog.info("Voice ID: " + (!embedder.isInstalled ? "model not installed (scripts/setup-voiceid.sh)" : voiceID.isEnrolled ? "on, threshold \(config.tuning.speakerThreshold)" : "not set up"))
         contacts = ContactBook(system: MacContacts())
         // Camera now; "glasses" is the hook a bridge will push frames into (remote-access phase).
         glasses = PushedFrameSource(name: "glasses")
@@ -188,6 +194,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),
             MemoryTool(store: memory), MemorySearchTool(store: memory), WeatherTool(world: world), NewsHeadlinesTool(world: world),
             UseSkillTool(library: skills), ContactsTool(book: contacts), LookTool(sources: frames), CameraTool(camera: camera),
+            VoiceIDTool(verifier: voiceID, lastCheck: { [weak self] in self?.conversation?.lastVoiceCheck },
+                        startEnrollment: { [weak self] in self?.startVoiceEnrollment() }),
         ])
         // Every paid call goes through one spend guard: a daily cap, a per-minute rate limit, and a ledger.
         budget = Budget(limits: config.tuning.budgetLimits, pricing: config.profile.pricing ?? Pricing())
@@ -211,6 +219,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         voice.isOnline = { [weak self] in self?.brain.isOnline ?? true }
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
         conversation.onFirstWord = { [weak self] in self?.brain.prewarmIfCold() }
+        conversation.voiceID = voiceID
         // A frozen main thread is not a crash, so launchd would never notice. This does.
         let supervised = Supervisor.isLoaded
         hangWatchdog = HangWatchdog(timeout: config.tuning.hangTimeoutSeconds) { silent in
@@ -301,6 +310,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                     memory: memory, skills: skills, local: local, narrator: narrator)
         menuBar.budget = budget
         menuBar.camera = camera
+        menuBar.voiceID = voiceID
+        menuBar.onEnrollVoice = { [weak self] in self?.startVoiceEnrollment() }
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() == nil ? "MISSING" : "present")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
                                     onBriefing: { [weak self] in
@@ -322,6 +333,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!hud" { self.hud.show(scene: false); return }
                                             if q == "!prewarm" { self.brain.prewarmIfCold(force: true); return }   // silent: no HUD, no speech
                                             if q.hasPrefix("!camera") { self.cameraDebug(q); return }               // drives the camera without a model turn
+                                            if q == "!voiceid enroll" { self.startVoiceEnrollment(); return }
                                             if q == "!hang" { JarvisLog.warn("Debug: freezing the main thread on purpose"); Thread.sleep(forTimeInterval: 120); return }
                                             if q == "!brief" {
                                                 Task { let r = await self.briefing.build(mode: self.modes.current); self.conversation.deliver(await self.narrator.narrate(r, kind: "briefing on request"), cards: [.briefing(r.data)]) }
@@ -349,6 +361,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let g = notchWindow.geometry
         JarvisLog.info("Notch detected=\(g.hasNotch) width=\(Int(g.notchWidth)) height=\(Int(g.notchHeight)) reduceMotion=\(notch.reduceMotion)")
+    }
+
+    /// Runs the guided Voice ID setup as soon as Jarvis is idle (it may be mid-reply when asked).
+    public func startVoiceEnrollment() {
+        guard !enrollmentPending else { return }
+        enrollmentPending = true
+        Task { @MainActor in
+            defer { enrollmentPending = false }
+            for _ in 0..<120 where conversation.state != .idle { try? await Task.sleep(for: .milliseconds(500)) }
+            let outcome = await VoiceEnrollment(verifier: voiceID, host: conversation).run()
+            JarvisLog.info("Voice ID: enrollment finished: \(outcome)")
+            if case .busy = outcome { notch.flash("Jarvis is busy. Try Voice ID setup again in a moment.", seconds: 5) }
+        }
     }
 
     /// `!camera show | hide | frame | photo | rec <seconds> [silent] | stop` in ask.txt. Results go to jarvis.log.
