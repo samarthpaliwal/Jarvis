@@ -325,15 +325,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }.store(in: &cancellables)
         // Mouse and keyboard control: off at every launch, on only when asked, off again by itself.
         let watcher = ControlInterruptWatcher(control: computerControl)
+        let seeing = SeeingPreview()
         controlWatcher = watcher
         computerControl.onChange = { [weak self] on, message in
             self?.notch.flash(message)
-            if on { watcher.start() } else { watcher.stop() }
+            if on { watcher.start() } else { watcher.stop(); seeing.hide() }
         }
         controlTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in Task { @MainActor in self?.computerControl.expireIfDue() } }
-        dispatcher.register(ComputerTool(control: computerControl, hands: LiveHands(), clearTheView: { [weak self] in
+        let computerTool = ComputerTool(control: computerControl, hands: LiveHands(), clearTheView: { [weak self] in
             if self?.hud?.isShowing == true { self?.hud?.stepAside(reason: "computer control") }
-        }))
+        })
+        computerTool.onLook = { jpeg, app in seeing.show(jpeg: jpeg, app: app) }
+        computerTool.onAct = { seeing.note($0) }
+        dispatcher.register(computerTool)
         dispatcher.register([SetDisplayModeTool(hud: hud), WelcomeHomeTool(run: { [weak self] in self?.scenes.homecoming(trigger: "voice") })])
         dispatcher.approvalHandler = { [weak self] request in await self?.conversation.requestApproval(request) ?? false }
         dispatcher.onSummary = { summary in JarvisLog.info("Action: \(summary)") }
