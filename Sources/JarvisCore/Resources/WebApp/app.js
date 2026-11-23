@@ -451,6 +451,93 @@ if (typeof document !== "undefined") (() => {
   $("approve").addEventListener("click", () => decide("yes"));
   $("deny").addEventListener("click", () => decide("no"));
 
+  // ---- Check-in: Jarvis asks which mode, and whether anyone is there ----
+
+  let checkin = null, pickedMode = null, pickedPeople = null;
+
+  function renderCheckin() {
+    $("checkin").hidden = !checkin;
+    if (!checkin) return;
+    $("checkin-text").textContent = checkin.text;
+    const box = $("checkin-modes");
+    box.textContent = "";
+    for (const m of checkin.modes) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = m.name;
+      b.className = "secondary" + ((pickedMode || checkin.current) === m.id ? " chosen" : "");
+      b.addEventListener("click", () => { pickedMode = m.id; renderCheckin(); });
+      box.appendChild(b);
+    }
+    $("people-no").classList.toggle("chosen", pickedPeople === false);
+    $("people-yes").classList.toggle("chosen", pickedPeople === true);
+  }
+
+  async function loadCheckin() {
+    if (!token) return;
+    try {
+      const r = await api("v1/checkin");
+      const q = r.question || null;
+      if ((q && q.id) !== (checkin && checkin.id)) { pickedMode = null; pickedPeople = null; }
+      checkin = q;
+    } catch { /* an older Jarvis, or unreachable: no question to show */ }
+    renderCheckin();
+  }
+
+  $("people-no").addEventListener("click", () => { pickedPeople = false; renderCheckin(); });
+  $("people-yes").addEventListener("click", () => { pickedPeople = true; renderCheckin(); });
+  $("checkin-skip").addEventListener("click", () => { checkin = null; renderCheckin(); });
+  $("checkin-send").addEventListener("click", async () => {
+    if (!checkin) return;
+    const body = { id: checkin.id };
+    if (pickedMode) body.mode = pickedMode;
+    if (pickedPeople !== null) body.people = pickedPeople;
+    try {
+      const r = await api("v1/checkin", { method: "POST", body: JSON.stringify(body), type: "application/json" });
+      $("reply").textContent = r.reply || "Got it.";
+    } catch (e) { $("reply").textContent = e.status === 409 ? "That question has expired." : e.message; }
+    checkin = null;
+    renderCheckin();
+  });
+
+  // ---- Notifications ----
+
+  const canNotify = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && window.isSecureContext;
+  const keyBytes = (b64) => {
+    const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((b64.length + 3) % 4));
+    return Uint8Array.from(s, (c) => c.charCodeAt(0));
+  };
+
+  async function notifyState() {
+    if (!canNotify) return "unsupported";
+    if (Notification.permission === "denied") return "denied";
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && (await reg.pushManager.getSubscription());
+    return sub && Notification.permission === "granted" ? "on" : "off";
+  }
+
+  async function showNotifyState() {
+    const state = await notifyState().catch(() => "unsupported");
+    $("notify").hidden = state !== "off" || !token;
+    $("notify-line").textContent =
+      state === "on" ? "Notifications are on for this device." :
+      state === "denied" ? "Notifications are blocked for Jarvis in this phone's Settings." :
+      state === "unsupported" ? "For notifications, add Jarvis to the Home Screen and open it from there." : "";
+  }
+
+  // Must run from a tap: phones only show the permission question in answer to one.
+  $("notify").addEventListener("click", async () => {
+    try {
+      if ((await Notification.requestPermission()) !== "granted") return showNotifyState();
+      const { key } = await api("v1/push/key");
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+      await api("v1/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()), type: "application/json" });
+      $("notify-line").textContent = "Notifications are on for this device.";
+      $("notify").hidden = true;
+    } catch (e) { $("notify-line").textContent = "Couldn't turn notifications on: " + (e.message || e); }
+  });
+
   // ---- Settings sheet ----
 
   $("menu").addEventListener("click", () => {
@@ -458,6 +545,7 @@ if (typeof document !== "undefined") (() => {
     const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
     $("install-line").textContent = standalone ? "" : "Tip: use Share → Add to Home Screen to keep Jarvis as an app. You will pair once more there.";
     $("speak-toggle").checked = wantsSpeech();
+    showNotifyState();
     $("sheet").showModal();
   });
   $("speak-toggle").addEventListener("change", (e) => store.set(SPEAK_KEY, e.target.checked ? "1" : "0"));
@@ -467,7 +555,8 @@ if (typeof document !== "undefined") (() => {
   // ---- Start ----
 
   document.addEventListener("visibilitychange", () => { if (document.hidden && call) endCall("Call ended: the app went to the background."); });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && token && app.dataset.state !== "thinking" && app.dataset.state !== "listening") refreshStatus(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && token && app.dataset.state !== "thinking" && app.dataset.state !== "listening") { refreshStatus(); loadCheckin(); } });
   if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("sw.js").catch(() => {});
   refreshStatus();
+  loadCheckin();
 })();

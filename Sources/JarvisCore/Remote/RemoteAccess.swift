@@ -197,6 +197,8 @@ public final class LiveRemoteBackend: RemoteBackend, @unchecked Sendable {
     private let router: SpeechRouter
     private let voiceID: SpeakerVerifier?
     private let makeTranscriber: @Sendable () -> Transcriber
+    /// Set once the check-in service exists. Without it the notification routes answer "not available".
+    public var checkIns: PresenceCheckIns?
 
     @MainActor
     public init(conversation: ConversationController, config: ConfigStore, modes: ModeManager, router: SpeechRouter,
@@ -212,6 +214,13 @@ public final class LiveRemoteBackend: RemoteBackend, @unchecked Sendable {
                          keysUnlocked: !SecretVault.shared.usesHelper || SecretVault.shared.state == .unlocked,
                          voiceIDEnrolled: enrolled, mode: modes.current.id)
         }
+    }
+
+    public func pushKey() async -> String? { await MainActor.run { checkIns?.pushStore.publicKey } }
+    public func subscribe(_ subscription: PushSubscription) async -> Bool { await MainActor.run { checkIns?.pushStore.subscribe(subscription) ?? false } }
+    public func checkIn() async -> CheckInView? { await MainActor.run { checkIns?.current() } }
+    public func answerCheckIn(_ id: UUID, mode: String?, people: Bool?) async -> String? {
+        await MainActor.run { checkIns?.answer(id: id, mode: mode, people: people) }
     }
 
     public func transcribe(_ samples: [Float]) async throws -> String {

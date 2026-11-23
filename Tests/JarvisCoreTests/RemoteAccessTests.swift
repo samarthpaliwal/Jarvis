@@ -184,6 +184,18 @@ final class FakeRemoteBackend: RemoteBackend, @unchecked Sendable {
     var result = RemoteTurnResult(status: .done, requestID: "r-000001", text: "Two classes and the gym.", tools: ["calendar_list"])
     var decision: RemoteTurnResult? = RemoteTurnResult(status: .done, requestID: "r-000001", text: "Sent.")
     var renderError: Error?
+    var key: String?
+    var subscribed: PushSubscription?
+    var question: CheckInView?
+    var answered: String?
+    func pushKey() async -> String? { key }
+    func subscribe(_ subscription: PushSubscription) async -> Bool { subscribed = subscription; return true }
+    func checkIn() async -> CheckInView? { question }
+    func answerCheckIn(_ id: UUID, mode: String?, people: Bool?) async -> String? {
+        guard id.uuidString == question?.id else { return nil }
+        answered = "\(mode ?? "-") \(people.map(String.init) ?? "-")"
+        return "Got it."
+    }
     var asked: [(text: String, voice: VoiceCheck?)] = []
     var decided: [(id: UUID, approved: Bool)] = []
     var rendered: [String] = []
@@ -231,6 +243,34 @@ final class RemoteAPITests: XCTestCase {
         return (response.status, (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any] ?? [:])
     }
     var speech: Data { AudioCodec.wav(AudioCodecTests.tone(seconds: 1)) }
+
+    func testNotificationRoutes() async {
+        var r = await send(request("GET", "/v1/push/key"))
+        XCTAssertEqual(r.status, 404, "a Jarvis without notifications says so")
+        backend.key = "BPublicKey"
+        r = await send(request("GET", "/v1/push/key"))
+        XCTAssertEqual(r.body["key"] as? String, "BPublicKey")
+        r = await send(request("POST", "/v1/push/subscribe", json: ["endpoint": "https://web.push.apple.com/x", "keys": ["p256dh": "p", "auth": "a"]]))
+        XCTAssertEqual(r.status, 200)
+        XCTAssertEqual(backend.subscribed?.device, "phone", "filed under the paired device's own name")
+        r = await send(request("POST", "/v1/push/subscribe", json: ["endpoint": "https://web.push.apple.com/x"]))
+        XCTAssertEqual(r.status, 400)
+        r = await send(request("GET", "/v1/checkin"))
+        XCTAssertTrue(r.body["question"] is NSNull)
+        let id = UUID()
+        backend.question = CheckInView(id: id.uuidString, text: "You've left.", modes: [["home", "Home"], ["road", "Road"]], current: "home")
+        r = await send(request("GET", "/v1/checkin"))
+        XCTAssertEqual((r.body["question"] as? [String: Any])?["text"] as? String, "You've left.")
+        r = await send(request("POST", "/v1/checkin", json: ["id": id.uuidString, "mode": "road", "people": false]))
+        XCTAssertEqual(r.status, 200)
+        XCTAssertEqual(backend.answered, "road false")
+        r = await send(request("POST", "/v1/checkin", json: ["id": UUID().uuidString]))
+        XCTAssertEqual(r.status, 409)
+        for (method, path) in [("GET", "/v1/push/key"), ("POST", "/v1/push/subscribe"), ("GET", "/v1/checkin"), ("POST", "/v1/checkin")] {
+            let none = await send(request(method, path, token: ""), ip: "100.64.9.\(path.count)")
+            XCTAssertEqual(none.status, 401, "\(method) \(path) without a token")
+        }
+    }
 
     func testEveryPathNeedsAToken() async {
         for (method, path) in [("GET", "/v1/status"), ("POST", "/v1/ask"), ("POST", "/v1/approve"), ("POST", "/v1/pair"), ("GET", "/v1/pair"), ("POST", "/"),

@@ -411,6 +411,38 @@ Jarvis listens for six seconds and offers the closest Apple device. macOS asks o
   in to the same Apple Account can normally still recognise it, but if the radar loses the phone after a day or
   so, run Set My Phone again and tell me.
 
+### The radar asks on your phone
+
+When the radar sees the phone leave, or come back, Jarvis sends the phone a notification: "You've left. Which
+mode should the Mac be in, and is anyone still there?" Tap it and the Jarvis phone app shows the question with
+a button per mode and Nobody / People are there.
+
+- **Your answer does two things only:** switches the mode, and turns Do Not Disturb Jarvis on when people are
+  there (off when nobody is), so Jarvis does not speak up by itself in front of guests. A mode change can never
+  start an action that needs approval.
+- One question at a time; it expires after 30 minutes. A phone drifting in and out of range gets at most one
+  notification every ten minutes.
+- **Set up:** pair the phone, add Jarvis to the Home Screen and open it from there, then ••• → **Turn on
+  notifications**. iPhones only allow notifications for web apps opened from the Home Screen.
+- The note travels through Apple's push service sealed (RFC 8291), so Apple carries it but cannot read it.
+  Without notifications on, the question still waits in the phone app.
+
+## Asking once per chat, and cutting in
+
+**Ask for Approval Once per Chat** (menu, off by default). After you say yes to one kind of action, the same
+kind does not ask again for the rest of that chat, which ends when you have not asked for anything for two
+minutes. What it never covers, so these still ask every time:
+
+- a request that read an email, a web page, a file, or the screen (where an injected instruction would come from),
+- anything asked from the phone,
+- a different kind of action: a yes to sending an email is not a yes to running a shell command.
+
+Every action is still logged, including the ones an earlier yes covered.
+
+**Cutting in.** `JARVIS_SPEECH_BARGE_IN=always` in `jarvis.env` lets you interrupt by just talking, through
+the speakers too. Jarvis ignores words that match what it is saying, and through speakers it needs three
+words before it counts. If it starts interrupting itself, set it back to `headphones`.
+
 ## Vision: looking on demand
 
 "Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.

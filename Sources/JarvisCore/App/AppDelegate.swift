@@ -36,6 +36,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             spotifyConnected: KeychainStore.read(account: SpotifySearch.clientIDAccount) != nil,
             goveeConnected: KeychainStore.read(account: GoveeClient.keyAccount) != nil,
             computerControlOn: computerControl.isEnabled,
+            notificationsOn: !(checkIns?.pushStore.devices.isEmpty ?? true),
             remoteListening: listening, voiceIDEnrolled: voiceID?.isEnrolled ?? false))
     }
     /// This very process was started by the launchd agent.
@@ -64,6 +65,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var hud: HUDWindowController!
     public let computerControl = ComputerControl()
     public let radar = PhoneRadar()
+    public private(set) var checkIns: PresenceCheckIns?
     private var controlWatcher: ControlInterruptWatcher?
     private var controlTimer: Timer?
     public private(set) var spotter: PhraseSpotter!
@@ -285,9 +287,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         conversation.onKeysNeeded = { [weak self] in self?.unlockKeys() }
         // Remote access: off until switched on, and then only on the Tailscale address.
         let speechLocale = Locale(identifier: config.profile.speech?.locale ?? "en-US")
-        remote = RemoteAccess(config: config, tokens: RemoteTokenStore(),
-                              backend: LiveRemoteBackend(conversation: conversation, config: config, modes: modes, router: voice, voiceID: voiceID,
-                                                         makeTranscriber: { TranscriberFactory.make(locale: speechLocale) }))
+        let remoteBackend = LiveRemoteBackend(conversation: conversation, config: config, modes: modes, router: voice, voiceID: voiceID,
+                                              makeTranscriber: { TranscriberFactory.make(locale: speechLocale) })
+        checkIns = PresenceCheckIns(push: PushStore(), modes: modes, notch: notch)
+        remoteBackend.checkIns = checkIns
+        remote = RemoteAccess(config: config, tokens: RemoteTokenStore(), backend: remoteBackend)
         remote.onPaired = { [weak self] name in self?.notch?.flash("Paired “\(name)” for remote access", seconds: 8) }
         remote.start()
         // A frozen main thread is not a crash, so launchd would never notice. This does.
@@ -401,6 +405,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         radar.onChange = { [weak self] now, before in
             guard let self, before != .unknown || now == .away else { return }      // the first "near" after launch is not news
             self.notch.flash(now == .near ? "\(self.radar.phoneName) is back" : "\(self.radar.phoneName) has left")
+            self.checkIns?.phoneChanged(to: now, from: before)
         }
         radar.start()
         menuBar.voiceID = voiceID

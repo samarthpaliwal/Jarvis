@@ -11,6 +11,8 @@
   apps and pages, password fields, risky clicks and Return gated in code. The HUD steps aside for browser pages.
 - **Phone radar:** near/away from the phone's Bluetooth signal (menu → Phone Radar). Computer control shows
   a corner preview of each picture it takes.
+- **Check-in on the phone:** when the radar sees you leave or return, a notification asks which mode and
+  whether anyone is there (Web Push, sealed end to end). **Ask for Approval Once per Chat** (opt-in).
 - **HUD:** no longer disappears when a conversation starts during its fade-out; new menu switch
   *Keep HUD On Screen Until I Click It*.
 

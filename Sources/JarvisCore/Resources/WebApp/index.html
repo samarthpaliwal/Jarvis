@@ -38,6 +38,20 @@
       <p id="heard" class="heard"></p>
       <p id="reply" class="reply"></p>
     </div>
+    <div id="checkin" class="card" hidden>
+      <p class="label">Jarvis is asking</p>
+      <p id="checkin-text"></p>
+      <div id="checkin-modes" class="row wrap"></div>
+      <p class="label second">Is anyone there?</p>
+      <div class="row">
+        <button id="people-no" class="secondary">Nobody</button>
+        <button id="people-yes" class="secondary">People are there</button>
+      </div>
+      <div class="row">
+        <button id="checkin-skip" class="secondary">Skip</button>
+        <button id="checkin-send">Send</button>
+      </div>
+    </div>
     <div id="approval" class="card" hidden>
       <p class="label">Needs your approval</p>
       <p id="approval-text"></p>
@@ -61,6 +75,8 @@
     <p id="device-line"></p>
     <p id="install-line" class="muted"></p>
     <label class="check"><input type="checkbox" id="speak-toggle" checked> Speak replies</label>
+    <button id="notify" class="secondary" hidden>Turn on notifications</button>
+    <p id="notify-line" class="muted"></p>
     <div class="row">
       <button id="forget" class="secondary">Forget this device</button>
       <button id="close-sheet">Done</button>

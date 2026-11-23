@@ -19,7 +19,7 @@ STAGES = [
     ("tts",      "5 Text to speech",     "SentenceChunkerTests SpeechQueueTests SpeechOutputTests VoicePickerTests KokoroTests VoiceTests"),
     ("pipeline", "Pipeline end to end",  "PipelineMachineTests PipelineStagesTests PipelineFailureTests SpokenFailureTests ConversationFlowTests LatencyTests TraceTests BudgetPipelineTests"),
     ("voiceid",  "Voice ID",             "VoiceCaptureTests VoiceGateRuleTests SentenceRecorderTests VoiceEnrollmentTests VoiceGatedApprovalTests VoiceMathTests SpeakerVerifierTests ECAPAModelTests"),
-    ("remote",   "Remote access",        "TailnetTests HTTPParserTests HTTPServerTests RemoteTokenTests RemoteAPITests RemoteAccessServiceTests RemoteTurnTests WebAppTests PairingTests"),
+    ("remote",   "Remote access",        "TailnetTests HTTPParserTests HTTPServerTests RemoteTokenTests RemoteAPITests RemoteAccessServiceTests RemoteTurnTests WebAppTests PairingTests WebPushTests CheckInBoxTests PresenceCheckInTests"),
     ("privacy",  "Privacy and keys",     "PrivacyTests RetentionTests SecretVaultTests"),
     ("app",      "App and settings",     "ConfigTests SettingsTests LenientConfigTests ModeScorerTests QuietHoursTests NotchGeometryTests SupervisorTests HangWatchdogTests StayAwakeTests PresenceTrackerTests"),
 ]

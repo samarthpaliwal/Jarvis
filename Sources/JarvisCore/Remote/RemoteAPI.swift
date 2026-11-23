@@ -24,6 +24,18 @@ public protocol RemoteBackend: Sendable {
     func decide(_ id: UUID, approved: Bool) async -> RemoteTurnResult?
     /// Stage 5, to data instead of the speakers.
     func render(_ text: String) async throws -> (data: Data, mime: String)
+    /// Notifications: the key a phone subscribes with, saving its subscription, and the open check-in question.
+    func pushKey() async -> String?
+    func subscribe(_ subscription: PushSubscription) async -> Bool
+    func checkIn() async -> CheckInView?
+    func answerCheckIn(_ id: UUID, mode: String?, people: Bool?) async -> String?
+}
+
+public extension RemoteBackend {
+    func pushKey() async -> String? { nil }
+    func subscribe(_ subscription: PushSubscription) async -> Bool { false }
+    func checkIn() async -> CheckInView? { nil }
+    func answerCheckIn(_ id: UUID, mode: String?, people: Bool?) async -> String? { nil }
 }
 
 /// The remote API: three routes, a token on every one.
@@ -139,7 +151,15 @@ public final class RemoteAPI: @unchecked Sendable {
         case ("GET", "/v1/status"): response = await status(device: device)
         case ("POST", "/v1/ask"): response = Self.wantsPlainText(request) ? Self.plainText(await ask(request)) : await ask(request)
         case ("POST", "/v1/approve"): response = await approve(request)
-        case (_, "/v1/status"), (_, "/v1/ask"), (_, "/v1/approve"): response = .error(405, "method_not_allowed", "That path does not take \(request.method).")
+        case ("GET", "/v1/push/key"):
+            if let key = await backend.pushKey() { response = .json(200, ["key": key]) } else { response = .error(404, "not_available", "Notifications are not available.") }
+        case ("POST", "/v1/push/subscribe"): response = await subscribe(request, device: device)
+        case ("GET", "/v1/checkin"):
+            if let q = await backend.checkIn() {
+                response = .json(200, ["question": ["id": q.id, "text": q.text, "modes": q.modes.map { ["id": $0[0], "name": $0[1]] }, "current": q.current] as [String: Any]])
+            } else { response = .json(200, ["question": NSNull()]) }
+        case ("POST", "/v1/checkin"): response = await answerCheckIn(request)
+        case (_, "/v1/status"), (_, "/v1/ask"), (_, "/v1/approve"), (_, "/v1/push/key"), (_, "/v1/push/subscribe"), (_, "/v1/checkin"): response = .error(405, "method_not_allowed", "That path does not take \(request.method).")
         default: response = .error(404, "not_found", "There is nothing at that path.")
         }
         JarvisLog.info("Remote: \(request.method) \(request.path.prefix(40)) from \(ip) (\(device.name)) → \(response.status) in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
@@ -162,6 +182,28 @@ public final class RemoteAPI: @unchecked Sendable {
         guard let token else { return .error(500, "pairing_failed", "Pairing failed. Try again from the Mac.") }
         throttle.recordSuccess(ip)
         return .json(200, ["token": token, "device": name])
+    }
+
+    private func subscribe(_ request: HTTPRequest, device: RemoteToken) async -> HTTPResponse {
+        guard request.body.count <= 4096, let json = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+              let endpoint = json["endpoint"] as? String, let keys = json["keys"] as? [String: Any],
+              let p = keys["p256dh"] as? String, let a = keys["auth"] as? String else {
+            return .error(400, "bad_request", "A push subscription is required.")
+        }
+        // Filed under the paired device's own name, so it cannot be registered for someone else.
+        guard await backend.subscribe(PushSubscription(device: device.name, endpoint: endpoint, p256dh: p, auth: a)) else {
+            return .error(400, "bad_subscription", "That notification address is not one Jarvis can use.")
+        }
+        return .json(200, ["ok": true])
+    }
+
+    private func answerCheckIn(_ request: HTTPRequest) async -> HTTPResponse {
+        guard request.body.count <= 1024, let json = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+              let id = (json["id"] as? String).flatMap(UUID.init) else { return .error(400, "bad_request", "The question's id is required.") }
+        guard let said = await backend.answerCheckIn(id, mode: json["mode"] as? String, people: json["people"] as? Bool) else {
+            return .error(409, "not_open", "That question is no longer open.")
+        }
+        return .json(200, ["ok": true, "reply": said])
     }
 
     private func status(device: RemoteToken) async -> HTTPResponse {
