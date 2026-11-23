@@ -753,6 +753,8 @@ final class WebAppTests: XCTestCase {
         const silence = A.endpointer(); let s = 'continue'; for (let i = 0; i < 100 && s === 'continue'; i++) s = silence(0.001, 0.1);
         const talker = A.endpointer(); let t = 'continue'; let ticks = 0; while (t === 'continue') { t = talker(0.2, 0.1); ticks++; }
         console.log(JSON.stringify({ speechThenPause, silence: s, talker: t, talkerSeconds: ticks / 10, same: A.downsample(new Float32Array(10), 16000).length,
+                                     byes: ["bye", "Goodbye, Jarvis.", "ok hang up", "that's all", "bye bye"].every(A.isGoodbye),
+                                     notByes: ["", "say goodbye to Maya for me in the email", "buy milk", "what is a bye week", "all of that"].some(A.isGoodbye),
                                      rms: A.rms(new Float32Array([0.5, -0.5])), bytes: Array.from(A.base64ToBytes('AQID')) }));
         """
         let scriptURL = dir.appendingPathComponent("check.js"), wavURL = dir.appendingPathComponent("out.wav")
@@ -767,6 +769,7 @@ final class WebAppTests: XCTestCase {
         let report = try XCTUnwrap(JSONSerialization.jsonObject(with: out.fileHandleForReading.readDataToEndOfFile()) as? [String: Any])
         XCTAssertEqual(report["speechThenPause"] as? String, "done"); XCTAssertEqual(report["silence"] as? String, "nothing")
         XCTAssertEqual(report["talker"] as? String, "limit"); XCTAssertEqual(report["talkerSeconds"] as? Double ?? 0, 30, accuracy: 0.2)
+        XCTAssertEqual(report["byes"] as? Bool, true, "short goodbyes end a call"); XCTAssertEqual(report["notByes"] as? Bool, false, "a request that merely mentions goodbye does not")
         XCTAssertEqual(report["same"] as? Int, 10); XCTAssertEqual(report["rms"] as? Double ?? 0, 0.5, accuracy: 1e-6); XCTAssertEqual(report["bytes"] as? [Int], [1, 2, 3])
 
         let samples = try AudioCodec.decode(try Data(contentsOf: wavURL), maxSeconds: 60)

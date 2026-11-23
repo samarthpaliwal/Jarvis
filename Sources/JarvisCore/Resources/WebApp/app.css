@@ -49,3 +49,6 @@ dialog p { margin: 0 0 12px; }
 .check input { width: 20px; height: 20px; }
 [hidden] { display: none !important; }
 @media (prefers-reduced-motion: reduce) { #ring { transition: none; animation: none !important; } }
+#call { align-self: center; margin: 0 0 14px; padding: 10px 28px; border-radius: 999px; }
+main[data-call="on"] #call { background: var(--bad); color: #fff; }
+main[data-call="on"] #mic { box-shadow: 0 0 0 3px rgba(76, 217, 100, .45); }

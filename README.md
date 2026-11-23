@@ -646,6 +646,11 @@ anywhere else, no third-party scripts.
 - **Type** in the field under the button instead, any time.
 - **Approvals** appear as a card with the exact action and *Yes, do it* / *No*; you can also tap the mic
   and say yes or no. The rules above still apply: without a verified voice there is no card, only a refusal.
+- **Call** (under the mic) starts a hands-free conversation: the microphone stays open, Jarvis listens
+  again after every reply, and the screen stays on. It ends when you tap *Hang up*, say "bye" or "that's
+  all", leave the app, or nobody speaks for 90 seconds. Jarvis does not listen while it is talking, so it
+  cannot hear itself; tap the mic to cut a reply short. Approvals work the same way: it asks, you say yes
+  or no.
 - ••• opens settings: turn spoken replies off, or forget the pairing on this device.
 
 **Pairing.** Jarvis menu → *Remote Access* → *Pair a Phone…*, name the phone. The Mac shows a six-digit
@@ -688,8 +693,9 @@ port too (it still needs a token), and the wrong-token lockout is shared by all 
 **What has and has not been tried.** In a desktop browser at phone size, against the running app:
 pairing with a code, a typed request and its reply, decoding the spoken reply, and uploading audio made by
 the page's recorder. The recorder's resampling and WAV encoding are tested under Node against the Mac's
-decoder. Not yet tried: a real phone, the microphone in a browser, Add to Home Screen, and the service
-worker (the test browser does not run service workers).
+decoder. Pairing was also run in an iPhone simulator over the real `https://` tailnet address, and call
+mode was run for several turns against a simulated microphone. Not yet tried: a real phone's microphone,
+Add to Home Screen, and the service worker (the test browser does not run service workers).
 
 ### Later: a real app icon (Capacitor)
 
@@ -1214,6 +1220,10 @@ Unit tests write to a temporary folder, never to these files.
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.14.1 — Call mode (2026-11-23)
+- **Phone app:** *Call* opens a hands-free, turn-after-turn conversation over the tailnet. Ends on Hang up,
+  "bye", leaving the app, or 90 seconds of silence.
 
 ### 0.14.0 — Upgrade phase 6: privacy and retention (2026-11-23)
 - **Local-first, visible:** a *Privacy* menu and a startup log line say what leaves this Mac. No audio does;

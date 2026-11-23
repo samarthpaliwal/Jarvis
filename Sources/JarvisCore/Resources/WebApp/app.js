@@ -69,6 +69,14 @@ const JarvisAudio = {
     };
   },
 
+  /** A short "that's it" that ends a call: "bye", "goodbye Jarvis", "hang up", "that's all". */
+  isGoodbye(text) {
+    const words = String(text || "").toLowerCase().replace(/[^a-z' ]/g, " ").split(/\s+/).filter(Boolean);
+    if (!words.length || words.length > 4) return false;
+    const said = words.join(" ").replace(/'/g, "");
+    return ["bye", "goodbye", "hang up", "thats all", "end call", "end the call"].some((p) => said === p || said.startsWith(p + " ") || said.endsWith(" " + p));
+  },
+
   base64ToBytes(b64) {
     const bin = atob(b64);
     const out = new Uint8Array(bin.length);
@@ -104,6 +112,10 @@ if (typeof document !== "undefined") (() => {
   let device = "";
   let pendingApproval = null;
   let audioContext = null, playing = null, recorder = null;
+  // A call: the microphone stays open and Jarvis listens again after every reply, until you hang up.
+  let call = null;
+  let hungUpWhileThinking = false;
+  const CALL_QUIET_LIMIT = 90;             // seconds of nobody speaking before the call ends by itself
   const canRecord = !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
   // ---- Talking to the Mac ----
@@ -136,11 +148,12 @@ if (typeof document !== "undefined") (() => {
     if (hint !== undefined) $("hint").textContent = hint;
   }
   function setLink(kind, text) { app.dataset.link = kind; $("status").textContent = text; }
-  const idleHint = () => (canRecord ? "Tap to talk" : "The microphone needs HTTPS here. Type instead.");
+  const idleHint = () => (call ? "On a call" : canRecord ? "Tap to talk" : "The microphone needs HTTPS here. Type instead.");
 
   function unpair(message) {
     token = null; store.set(TOKEN_KEY, null);
     pendingApproval = null;
+    if (call) endCall();
     setLink("down", "Not paired");
     $("pair-error").textContent = message || "";
     $("pair-server").hidden = !wrapped;
@@ -228,7 +241,11 @@ if (typeof document !== "undefined") (() => {
       pendingApproval = null;
       $("approval").hidden = true;
     }
-    if (result.audio && result.audio.base64) await play(result.audio.base64);
+    if (call && !pendingApproval && JarvisAudio.isGoodbye(result.transcript)) call.ending = true;
+    // Hung up while Jarvis was still thinking: show the answer, but do not start talking after the call is over.
+    const silenced = hungUpWhileThinking;
+    hungUpWhileThinking = false;
+    if (!silenced && result.audio && result.audio.base64) await play(result.audio.base64);
     setState("idle", pendingApproval ? "Yes or no?" : idleHint());
   }
 
@@ -306,25 +323,33 @@ if (typeof document !== "undefined") (() => {
   async function startRecording() {
     const ctx = context();
     await ctx.resume();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const inCall = call;
+    const stream = inCall ? inCall.stream : await openMicrophone();
     const source = ctx.createMediaStreamSource(stream);
     const node = ctx.createScriptProcessor(4096, 1, 1);
     const mute = ctx.createGain();
     mute.gain.value = 0;                      // the graph must reach the output to run; this keeps it silent
     const chunks = [];
-    const verdict = JarvisAudio.endpointer(pendingApproval ? { pauseSeconds: 0.9, noSpeechSeconds: 6, maxSeconds: 8 } : {});
+    const verdict = JarvisAudio.endpointer(pendingApproval ? { pauseSeconds: 0.9, noSpeechSeconds: 6, maxSeconds: 8 }
+      : inCall ? { pauseSeconds: 1.1, noSpeechSeconds: 10, maxSeconds: 30 } : {});
+    let seconds = 0;
     recorder = {
       stop(send) {
         if (recorder !== this) return;
         recorder = null;
         node.onaudioprocess = null;
         try { source.disconnect(); node.disconnect(); mute.disconnect(); } catch { /* fine */ }
-        stream.getTracks().forEach((t) => t.stop());
+        if (!inCall) stream.getTracks().forEach((t) => t.stop());      // a call keeps its microphone
         $("ring").style.removeProperty("--level");
-        if (!send) return setState("idle", pendingApproval ? "Yes or no?" : idleHint());
+        if (!send) {
+          if (inCall && call === inCall) inCall.quiet += seconds;
+          setState("idle", pendingApproval ? "Yes or no?" : idleHint());
+          return callNext(inCall);
+        }
         const samples = JarvisAudio.downsample(JarvisAudio.merge(chunks), ctx.sampleRate);
-        if (samples.length < JarvisAudio.TARGET_RATE * 0.3) return setState("idle", idleHint());
-        sendRecording(JarvisAudio.wav(samples));
+        if (samples.length < JarvisAudio.TARGET_RATE * 0.3) { setState("idle", idleHint()); return callNext(inCall); }
+        if (inCall) inCall.quiet = 0;
+        sendRecording(JarvisAudio.wav(samples)).then(() => callNext(inCall));
       },
     };
     const mine = recorder;
@@ -333,15 +358,74 @@ if (typeof document !== "undefined") (() => {
       chunks.push(data);
       const level = JarvisAudio.rms(data);
       $("ring").style.setProperty("--level", String(1 + Math.min(0.35, level * 4)));
+      seconds += data.length / ctx.sampleRate;
       const v = verdict(level, data.length / ctx.sampleRate);
       if (v === "done" || v === "limit") mine.stop(true);
-      else if (v === "nothing") { mine.stop(false); $("reply").textContent = "I didn't catch anything."; }
+      else if (v === "nothing") { if (!inCall) $("reply").textContent = "I didn't catch anything."; mine.stop(false); }
     };
     source.connect(node); node.connect(mute); mute.connect(ctx.destination);
     $("reply").classList.remove("failed");
-    if (!pendingApproval) { $("heard").textContent = ""; $("reply").textContent = ""; }
-    setState("listening", "Listening… tap when you're done");
+    if (!pendingApproval && !inCall) { $("heard").textContent = ""; $("reply").textContent = ""; }
+    setState("listening", inCall ? "On a call · listening" : "Listening… tap when you're done");
   }
+
+  function openMicrophone() {
+    return navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  }
+
+  // ---- Call mode: hands-free, turn after turn ----
+
+  /** After a reply (or a silence) on a call: listen again, or end the call if it is over. */
+  function callNext(inCall) {
+    if (!inCall || call !== inCall) return;
+    if (inCall.ending) return endCall("Call ended.");
+    if (inCall.quiet >= CALL_QUIET_LIMIT) return endCall("Call ended: nobody spoke for a while.");
+    if (!token) return endCall();
+    // A beat of silence first, so the tail of Jarvis's own voice is not taken for yours.
+    setTimeout(() => {
+      if (call !== inCall || recorder || app.dataset.state !== "idle") return;
+      startRecording().catch(() => endCall("The microphone stopped. Call ended."));
+    }, 350);
+  }
+
+  async function startCall() {
+    if (call || !canRecord || app.dataset.state === "thinking") return;
+    stopPlaying();
+    if (recorder) recorder.stop(false);
+    try {
+      const ctx = context();
+      await ctx.resume();
+      const stream = await openMicrophone();
+      call = { stream, quiet: 0, ending: false, wakeLock: null };
+      // Keep the screen on for the length of the call, where the browser can.
+      try { if (navigator.wakeLock) call.wakeLock = await navigator.wakeLock.request("screen"); } catch { /* not allowed: fine */ }
+      app.dataset.call = "on";
+      $("call").textContent = "Hang up";
+      $("heard").textContent = ""; $("reply").textContent = "";
+      await startRecording();
+    } catch (e) {
+      const denied = e && (e.name === "NotAllowedError" || e.name === "SecurityError");
+      endCall(denied ? "Allow the microphone for this site, then call again." : "The microphone isn't available.");
+    }
+  }
+
+  function endCall(message) {
+    const ended = call;
+    call = null;
+    delete app.dataset.call;
+    $("call").textContent = "Call";
+    if (recorder) recorder.stop(false);
+    stopPlaying();
+    if (ended) {
+      ended.stream.getTracks().forEach((t) => t.stop());
+      try { if (ended.wakeLock) ended.wakeLock.release(); } catch { /* already released */ }
+    }
+    if (app.dataset.state !== "thinking") setState("idle", message || idleHint());
+    else { hungUpWhileThinking = !!ended; if (message) $("hint").textContent = message; }
+  }
+
+  $("call").addEventListener("click", () => (call ? endCall("Call ended.") : startCall()));
+  $("call").hidden = !canRecord;
 
   $("mic").addEventListener("click", async () => {
     const state = app.dataset.state;
@@ -382,6 +466,7 @@ if (typeof document !== "undefined") (() => {
 
   // ---- Start ----
 
+  document.addEventListener("visibilitychange", () => { if (document.hidden && call) endCall("Call ended: the app went to the background."); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && token && app.dataset.state !== "thinking" && app.dataset.state !== "listening") refreshStatus(); });
   if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("sw.js").catch(() => {});
   refreshStatus();
