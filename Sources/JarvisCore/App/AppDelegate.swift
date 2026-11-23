@@ -21,6 +21,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var actionLog: ActionLog!
     private var restartedAfterCrash = false
     public private(set) var remote: RemoteAccess!
+    private var retentionTimer: Timer?
+
+    /// Where data goes with the current settings (menu → Privacy, and the startup log).
+    public func dataFlows() -> [DataFlow] {
+        let listening: Bool = { if case .listening = remote?.state { return true } else { return false } }()
+        return Privacy.flows(PrivacySnapshot(
+            transcriber: transcriber.name, transcriberUsesServer: transcriber.sendsAudioOffDevice, voiceEngine: voice.engineKind,
+            claudeConfigured: KeychainStore.apiKey() != nil || SecretVault.shared.state == .locked || SecretVault.shared.state == .unlocking,
+            googleConnected: KeychainStore.read(account: GoogleAuth.refreshTokenAccount) != nil,
+            notionConnected: KeychainStore.read(account: NotionClient.tokenAccount) != nil,
+            spotifyConnected: KeychainStore.read(account: SpotifySearch.clientIDAccount) != nil,
+            remoteListening: listening, voiceIDEnrolled: voiceID?.isEnrolled ?? false))
+    }
     /// This very process was started by the launchd agent.
     private var supervisedByLaunchd = false
     private var unlockingKeys = false
@@ -150,6 +163,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         JarvisLog.info("UI: \(ui.style) on \(ui.screen) screen, position \(ui.position), halo \(ui.halo)")
         FileLog.maxBytes = Int(config.tuning.logMaxMegabytes * 1024 * 1024)
         FileLog.keepFiles = config.tuning.logKeepFiles
+        AppleSpeechTranscriber.allowServer = config.tuning.cloudSpeechRecognition.lowercased() == "allow"
+        // Data retention: drop what is older than the policy allows, now and once a day.
+        let retention = Retention.Policy(config.tuning)
+        let sweep: @Sendable () -> Void = {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let r = Retention.sweep(retention, media: [home.appendingPathComponent("Movies/Jarvis"), home.appendingPathComponent("Pictures/Jarvis")])
+            if !r.isEmpty { JarvisLog.info("Retention: removed \(r.linesRemoved) old log lines and \(r.filesRemoved) old log files; moved \(r.mediaTrashed) old recordings to the Trash") }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 20) { sweep() }
+        retentionTimer = Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { _ in DispatchQueue.global(qos: .utility).async { sweep() } }
         HTTP.policy = config.tuning.retryPolicy
         wake = WakeWordService()
         wake.tuning = config.tuning
@@ -342,6 +365,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.voiceID = voiceID
         menuBar.keys = self
         menuBar.remote = remote
+        menuBar.privacy = { [weak self] in self?.dataFlows() ?? [] }
         menuBar.onEnrollVoice = { [weak self] in self?.startVoiceEnrollment() }
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() != nil ? "present" : SecretVault.shared.usesHelper && SecretVault.shared.state != .unlocked ? "locked until Touch ID" : "MISSING")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
@@ -393,6 +417,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             self.conversation.deliver(r.isError ? r.content : "Ran it. Output: \(r.content.suffix(60))")
                                         }
                                     }, demo: demo)
+        JarvisLog.info("Privacy: " + Privacy.summary(dataFlows()))
         JarvisLog.info("Speech in: \(transcriber.name) · Speech out: \(voice.engineName) · Apple fallback: \(speech.name)")
 
         // JARVIS_NO_WAKE=1 skips the microphone entirely (used for CPU baselines).

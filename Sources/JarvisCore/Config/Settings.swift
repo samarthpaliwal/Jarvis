@@ -200,6 +200,20 @@ public struct Tuning: Codable, Equatable, Sendable {
     /// Rotated files kept per log (jarvis.log.1 … .N).
     public var logKeepFiles: Int = 3
 
+    // Privacy and retention (0 days = keep forever)
+    /// May speech recognition use Apple's servers when this Mac cannot do it on-device? "never" or "allow".
+    public var cloudSpeechRecognition: String = "never"
+    /// What was said, by you and by Jarvis (conversations.log).
+    public var retainConversationsDays: Double = 30
+    /// Per-request timings, no words (trace.jsonl).
+    public var retainTraceDays: Double = 30
+    /// Diagnostics (jarvis.log).
+    public var retainLogDays: Double = 14
+    /// The record of every tool call (actions.log).
+    public var retainActionsDays: Double = 90
+    /// Photos and videos Jarvis took. Older ones are moved to the Trash. 0 keeps them.
+    public var retainMediaDays: Double = 0
+
     public init() {}
 
     public var budgetLimits: Budget.Limits {
@@ -270,6 +284,12 @@ public struct Tuning: Codable, Equatable, Sendable {
         echoWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .echoWindowSeconds) ?? echoWindowSeconds
         logMaxMegabytes = try c.decodeIfPresent(Double.self, forKey: .logMaxMegabytes) ?? logMaxMegabytes
         logKeepFiles = try c.decodeIfPresent(Int.self, forKey: .logKeepFiles) ?? logKeepFiles
+        cloudSpeechRecognition = try c.decodeIfPresent(String.self, forKey: .cloudSpeechRecognition) ?? cloudSpeechRecognition
+        retainConversationsDays = try c.decodeIfPresent(Double.self, forKey: .retainConversationsDays) ?? retainConversationsDays
+        retainTraceDays = try c.decodeIfPresent(Double.self, forKey: .retainTraceDays) ?? retainTraceDays
+        retainLogDays = try c.decodeIfPresent(Double.self, forKey: .retainLogDays) ?? retainLogDays
+        retainActionsDays = try c.decodeIfPresent(Double.self, forKey: .retainActionsDays) ?? retainActionsDays
+        retainMediaDays = try c.decodeIfPresent(Double.self, forKey: .retainMediaDays) ?? retainMediaDays
     }
 
     /// Applies `JARVIS_*` overrides. Values that don't parse are skipped and reported.

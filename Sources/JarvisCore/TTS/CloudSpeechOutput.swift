@@ -238,6 +238,8 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
     public var name: String { active.name }
     public var isSpeaking: Bool { active.isSpeaking }
     public var engineName: String { cloud?.name ?? apple.name }
+    /// "kokoro", "elevenlabs", "openai", or "apple": where reply text is turned into speech.
+    public var engineKind: String { cloud?.provider.rawValue ?? "apple" }
 
     /// Re-reads config + Keychain. Call after keys or settings change.
     /// Whether the local Kokoro server is up (set by the app).

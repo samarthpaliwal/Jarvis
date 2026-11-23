@@ -720,6 +720,49 @@ swift test --filter "Remote|HTTP|AudioCodec|Tailnet|WebApp|Pairing"   # API, tok
 Settings (`profile.json → tuning`, or `JARVIS_…` in `jarvis.env`): `remotePort` 8787, `remoteBind`
 `tailscale`, `remoteMaxAudioSeconds` 60, `remoteApprovalTimeoutSeconds` 60, `remoteAllowedOrigins` empty.
 
+## Privacy: what leaves this Mac, and what is kept
+
+**Local-first.** Menu → *Privacy* lists, for the settings in use right now, what stays on this Mac and what
+leaves it. The same summary is written to `jarvis.log` at every start (`Privacy: No audio leaves this Mac. …`).
+
+| Stage | Data | Where it is processed |
+|---|---|---|
+| Wake word | microphone audio | this Mac (openWakeWord) |
+| Speech recognition | the audio of each request | this Mac (Apple SpeechAnalyzer, on-device) |
+| Voice ID | your voiceprint, each request's audio | this Mac |
+| Remote access | recordings from your phone | this Mac, over your tailnet |
+| Thinking | the request as text, the conversation, tool results | Anthropic (Claude) |
+| Looking | one camera frame or screenshot, only when you ask | Anthropic |
+| Web search | queries and page addresses, only when needed | Anthropic |
+| Speaking | the text of the reply | this Mac (Kokoro, Apple); ElevenLabs or OpenAI only if you choose those voices |
+| Gmail, Notion, Spotify, weather | what you ask about | that service, only when you ask |
+
+**No stage sends audio to the cloud.** The one that could is the fallback recognizer on older macOS for a
+language Apple cannot recognize on-device; there Jarvis refuses and says so rather than send your voice to
+Apple. That is your decision to change: `cloudSpeechRecognition` = `never` (default) or `allow`. If it is
+ever in effect, the Privacy menu's first line and the startup log say that audio leaves this Mac.
+Text does leave: Claude needs the words to answer. Nothing is sent anywhere until the wake word fires.
+
+**Retention.** Applied when Jarvis starts and once a day. `0` means keep forever.
+
+| What | Where | Kept | Setting |
+|---|---|---|---|
+| What was said, by you and by Jarvis | `~/Library/Logs/Jarvis/conversations.log` | 30 days | `retainConversationsDays` |
+| Per-request timings (no words) | `trace.jsonl` | 30 days | `retainTraceDays` |
+| Diagnostics | `jarvis.log` | 14 days | `retainLogDays` |
+| Every tool call: the audit trail | `actions.log` | 90 days | `retainActionsDays` |
+| Photos and videos you asked for | `~/Pictures/Jarvis`, `~/Movies/Jarvis` | forever; with a limit, older ones go to the Trash | `retainMediaDays` |
+| Recent chats for context | memory only | 30 minutes, gone on quit | `sessionMemoryMinutes` |
+| Long-term memory (facts you told it) | `memory.db` | until you remove them | |
+| Your voiceprint | `voiceprint/` | until *Voice ID → Forget* | |
+| Audio of requests, camera frames for "look" | not stored | | |
+| Remote access tokens (hashes) | `remote/tokens.json` | until revoked | |
+| Spending totals | `spend.json` | amounts only | |
+
+Logs also rotate by size (5 MB, three old files). Jarvis only ever prunes its own four log files and, if
+you set a limit, files it named itself in its own two media folders, and those go to the Trash, not away.
+API keys are in the Keychain behind Touch ID and are redacted from tool output and logs.
+
 ## Keys: Touch ID instead of the keychain password
 
 Jarvis keeps its API keys and tokens (Claude, Google, Notion, Spotify, ElevenLabs, OpenAI) in the macOS
@@ -1171,6 +1214,13 @@ Unit tests write to a temporary folder, never to these files.
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.14.0 — Upgrade phase 6: privacy and retention (2026-11-23)
+- **Local-first, visible:** a *Privacy* menu and a startup log line say what leaves this Mac. No audio does;
+  the one recognizer that could use Apple's servers is refused unless `cloudSpeechRecognition` is `allow`.
+- **Retention:** conversations and timings 30 days, diagnostics 14, the tool log 90, recordings kept (or
+  moved to the Trash after a limit you set). Swept at start and daily.
+- **Fix:** the pairing-code dialog froze the main queue and the hang watchdog restarted Jarvis after 30 s.
 
 ### 0.13.0 — Upgrade phase 5: remote access (2026-11-23)
 - **Tailscale:** setup walkthrough and `scripts/tailscale-check.sh`.

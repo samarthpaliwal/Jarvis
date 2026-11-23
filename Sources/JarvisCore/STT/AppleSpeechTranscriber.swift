@@ -18,6 +18,10 @@ public final class AppleSpeechTranscriber: NSObject, Transcriber, @unchecked Sen
     private var onError: ((Error) -> Void)?
     private var finished = false
 
+    /// Set from `cloudSpeechRecognition` at launch. Off: audio never goes to Apple's servers.
+    public nonisolated(unsafe) static var allowServer = false
+    public var sendsAudioOffDevice: Bool { !(recognizer?.supportsOnDeviceRecognition ?? true) }
+
     public init(locale: Locale = Locale(identifier: "en-US")) {
         recognizer = SFSpeechRecognizer(locale: locale)
         let onDevice = recognizer?.supportsOnDeviceRecognition ?? false
@@ -44,12 +48,16 @@ public final class AppleSpeechTranscriber: NSObject, Transcriber, @unchecked Sen
         cancel()
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
+        if !recognizer.supportsOnDeviceRecognition {
+            // Local-first: request audio does not go to Apple's servers unless that was switched on.
+            guard Self.allowServer else {
+                throw TranscriberError.unavailable("this Mac can't recognize speech on-device for this language, and cloud recognition is off (cloudSpeechRecognition)")
+            }
+            JarvisLog.warn("On-device speech recognition unsupported for this locale; using Apple's server (cloudSpeechRecognition=allow)")
+        }
         req.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
         req.addsPunctuation = true
         req.taskHint = .dictation
-        if !recognizer.supportsOnDeviceRecognition {
-            JarvisLog.warn("On-device speech recognition unsupported for this locale; using Apple's server")
-        }
         lock.lock()
         self.request = req
         self.onUpdate = onUpdate

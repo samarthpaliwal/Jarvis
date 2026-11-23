@@ -169,33 +169,48 @@ if (typeof document !== "undefined") (() => {
 
   // ---- Pairing ----
 
+  let pairingNow = false;
   $("pair-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (pairingNow) return;                    // one attempt at a time: a second tap must not undo the first
     const entered = $("pair-code").value.trim();
     $("pair-error").textContent = "";
     if (!entered) return;
+    let target = server;
     if (wrapped) {
-      server = normalizeServer($("pair-server").value);
-      if (!server) { $("pair-error").textContent = "Enter your Mac's Tailscale address first."; return; }
+      target = normalizeServer($("pair-server").value);
+      if (!target) { $("pair-error").textContent = "Enter your Mac's Tailscale address first."; return; }
     }
+    const button = $("pair-form").querySelector("button");
+    const previous = { token, server };
+    pairingNow = true; button.disabled = true; button.textContent = "Pairing…";
     try {
+      server = target;
+      let candidate;
       if (/^jrv_[A-Za-z0-9_-]{20,}$/.test(entered)) {
-        token = entered;                       // a token made with "Create Access Token…"
+        candidate = entered;                   // a token made with "Create Access Token…"
+        token = candidate;
         await api("v1/status");
       } else {
         const code = entered.replace(/\D/g, "");
         if (code.length !== 6) { $("pair-error").textContent = "The code has six digits."; return; }
-        const paired = await api("v1/pair", { method: "POST", body: JSON.stringify({ code }), type: "application/json", auth: false });
-        token = paired.token;
+        candidate = (await api("v1/pair", { method: "POST", body: JSON.stringify({ code }), type: "application/json", auth: false })).token;
+        if (!candidate) throw new ApiError(0, "pairing_failed", "Pairing failed. Try again from the Mac.");
+        token = candidate;
       }
+      // Saved before anything else can fail, and never taken back by a later failed attempt.
       store.set(TOKEN_KEY, token);
       if (wrapped) store.set(SERVER_KEY, server);
       $("pair-code").value = "";
-      setState("loading");
-      await refreshStatus();
+      setLink("ok", "Paired");
+      show("talk");
+      setState("idle", idleHint());
+      refreshStatus();
     } catch (e) {
-      token = null;
-      $("pair-error").textContent = e.status === 401 ? "That code isn't right, or it has expired." : e.message;
+      token = previous.token; server = previous.server;
+      $("pair-error").textContent = e.status === 401 ? "That code isn't right, or it has expired. Get a new one on the Mac." : e.message;
+    } finally {
+      pairingNow = false; button.disabled = false; button.textContent = "Pair";
     }
   });
 

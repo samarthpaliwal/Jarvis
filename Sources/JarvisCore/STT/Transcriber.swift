@@ -29,6 +29,8 @@ public protocol Transcriber: AnyObject {
 
 public extension Transcriber {
     func waitUntilAcceptingAudio(timeout: TimeInterval) async -> Bool { true }
+    /// True when this engine would send audio off this Mac. On-device engines keep the default.
+    var sendsAudioOffDevice: Bool { false }
 }
 
 /// Transcribes one finished recording (a remote request) with a streaming transcriber.

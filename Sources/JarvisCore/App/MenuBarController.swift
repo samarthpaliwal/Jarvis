@@ -24,6 +24,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var camera: CameraController?
     /// Set by the app; adds the Voice ID submenu.
     public var voiceID: SpeakerVerifier?
+    /// Set by the app; adds the Privacy submenu: where data goes with the current settings.
+    public var privacy: (() -> [DataFlow])?
     /// Set by the app; adds the Remote Access submenu.
     public weak var remote: RemoteAccess?
     /// Set by the app; adds the Keys submenu.
@@ -272,6 +274,25 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
                 hint.isEnabled = false
                 sub.addItem(hint)
             }
+            item.submenu = sub
+            menu.addItem(item)
+        }
+        if let flows = privacy?() {
+            let item = NSMenuItem(title: "Privacy", action: nil, keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "hand.raised", accessibilityDescription: nil)
+            let sub = NSMenu()
+            func add(_ title: String) { let i = NSMenuItem(title: title, action: nil, keyEquivalent: ""); i.isEnabled = false; sub.addItem(i) }
+            add(Privacy.audioLeavingMac(flows).isEmpty ? "No audio leaves this Mac" : "Audio leaves this Mac!")
+            sub.addItem(.separator())
+            add("Stays on this Mac")
+            for f in flows where !f.leavesMac { add("   \(f.stage): \(f.what)") }
+            sub.addItem(.separator())
+            add("Leaves this Mac")
+            for f in flows where f.leavesMac { add("   \(f.stage) → \(f.destination): \(f.what) (\(f.when))") }
+            sub.addItem(.separator())
+            let t = config.tuning
+            func days(_ d: Double) -> String { d > 0 ? "\(Int(d)) days" : "forever" }
+            add("Kept: conversations \(days(t.retainConversationsDays)), tool log \(days(t.retainActionsDays)), diagnostics \(days(t.retainLogDays)), recordings \(days(t.retainMediaDays))")
             item.submenu = sub
             menu.addItem(item)
         }

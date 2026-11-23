@@ -79,9 +79,31 @@ public final class FileLog: @unchecked Sendable {
 
     public init(name: String) {
         url = FileLog.directory.appendingPathComponent(name)
+        Self.register(self)
     }
 
-    public init(url: URL) { self.url = url }
+    public init(url: URL) { self.url = url; Self.register(self) }
+
+    // Open logs by path, so the retention sweep can rewrite a file through the same queue that appends to it.
+    private final class Weak { weak var log: FileLog?; init(_ l: FileLog) { log = l } }
+    private static let registryLock = NSLock()
+    private nonisolated(unsafe) static var registry: [String: Weak] = [:]
+    private static func register(_ log: FileLog) { registryLock.lock(); registry[log.url.standardizedFileURL.path] = Weak(log); registryLock.unlock() }
+
+    /// Replaces a log's contents with `transform(contents)`, without racing a writer. Returns the count `transform` reports.
+    @discardableResult
+    public static func rewrite(_ url: URL, _ transform: (String) -> (text: String, removed: Int)) -> Int {
+        registryLock.lock(); let open = registry[url.standardizedFileURL.path]?.log; registryLock.unlock()
+        func apply() -> Int {
+            guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return 0 }
+            let result = transform(text)
+            guard result.removed > 0 else { return 0 }
+            guard (try? Data(result.text.utf8).write(to: url, options: .atomic)) != nil else { return 0 }
+            return result.removed
+        }
+        guard let open else { return apply() }
+        return open.queue.sync { let n = apply(); if n > 0 { open.size = nil }; return n }
+    }
 
     public func write(level: String, _ message: String) {
         append("\(formatter.string(from: Date())) [\(level)] \(message)\n")
