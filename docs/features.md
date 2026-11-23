@@ -328,6 +328,38 @@ Maps" work the same way (`google_search`, kinds `web`, `images`, `news`, `videos
 - **Never a key or a password.** A search that looks like one is refused.
 - The address is always `https://www.google.com/…`; the words you said can only ever be the search.
 
+## Any website
+
+"Hey Jarvis, open YouTube", "go to github.com/samarthpaliwal" opens that page in your default browser
+(`open_website`). Like the Google search it opens one page and stops.
+
+- **https, public sites only.** Addresses on this Mac or your network, IP addresses, other ports, and
+  anything that is not a web page (`file:`, app links) are refused.
+- **No banking, payment, or password sites.** Every app name in `denylist.json` also blocks its site
+  (Chase blocks chase.com), plus a built-in list. Refused even if you ask.
+- **Only when you ask**, and with a yes first, showing the whole address, if the request read outside content.
+
+## Lights (Govee)
+
+"Turn the lights off", "make the desk light blue", "lights to 40 percent", "warm white" (`lights`).
+
+Set up once: in the Govee Home app go to Profile → Settings (the gear) → **Apply for API Key**. Govee emails
+the key. Then Jarvis menu → Integrations → **Connect Govee Lights…** and paste it. It is kept in the Keychain
+behind Touch ID.
+
+- Names match loosely: "desk" finds "Desk Strip". No name means every light. An unknown name gets the list back.
+- Only lights are touched. Other Govee devices on the account (a heater, a humidifier) are ignored.
+- A light that cannot do what was asked (colour on a white-only lamp) is reported, not skipped silently.
+- Commands go through Govee's servers, so they need the internet and show under *Privacy* once connected.
+- Govee's API does not cover every model; a light missing from "list the lights" is one Govee does not expose.
+
+## Staying awake while plugged in
+
+Menu → **Stay Awake While Plugged In**. While it is on and the charger is connected, the Mac does not go to
+sleep on its own, so the phone app can still reach Jarvis when you are out. The display still sleeps. It is a
+request Jarvis holds (like `caffeinate`), not a system setting: it ends when the charger is unplugged or
+Jarvis quits. **Closing the lid still puts the Mac to sleep**; leave it open, or use an external display.
+
 ## Vision: looking on demand
 
 "Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.

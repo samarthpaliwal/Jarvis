@@ -4,6 +4,9 @@
 - **"Google cheap flights to Seattle"** opens the Google results page in the default browser
   (`google_search`: web, images, news, videos, maps). One page, nothing else; user requests only; asks first
   if the request read outside content; refuses anything that looks like a key.
+- **"Open YouTube"** opens any public https site (`open_website`); banking, payment and password sites refused.
+- **Govee lights** (`lights`): on, off, colour, brightness, warmth. Needs a Govee API key.
+- **Stay Awake While Plugged In** (menu): the Mac stays reachable from the phone while on the charger.
 - **HUD:** no longer disappears when a conversation starts during its fade-out; new menu switch
   *Keep HUD On Screen Until I Click It*.
 

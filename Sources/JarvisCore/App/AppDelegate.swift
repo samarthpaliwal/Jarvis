@@ -34,6 +34,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             googleConnected: KeychainStore.read(account: GoogleAuth.refreshTokenAccount) != nil,
             notionConnected: KeychainStore.read(account: NotionClient.tokenAccount) != nil,
             spotifyConnected: KeychainStore.read(account: SpotifySearch.clientIDAccount) != nil,
+            goveeConnected: KeychainStore.read(account: GoveeClient.keyAccount) != nil,
             remoteListening: listening, voiceIDEnrolled: voiceID?.isEnrolled ?? false))
     }
     /// This very process was started by the launchd agent.
@@ -176,6 +177,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 20) { sweep() }
         retentionTimer = Timer.scheduledTimer(withTimeInterval: 86_400, repeats: true) { _ in DispatchQueue.global(qos: .utility).async { sweep() } }
         HTTP.policy = config.tuning.retryPolicy
+        StayAwake.shared.start()
         wake = WakeWordService()
         wake.tuning = config.tuning
         transcriber = TranscriberFactory.make(locale: Locale(identifier: config.profile.speech?.locale ?? "en-US"))
@@ -229,7 +231,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         camera.onNotice = { [weak self] text in self?.conversation?.announceWhenIdle(text) }
         frames = FrameSources([CameraFrameSource(session: camera.session), glasses], default: "camera")
         dispatcher.register([
-            SystemStatusTool(), OpenAppTool(), GoogleSearchTool(), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
+            SystemStatusTool(), OpenAppTool(), GoogleSearchTool(), OpenWebsiteTool(), LightsTool(govee: GoveeClient()), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
             UndoLastActionTool(), ActionsTodayTool(log: actionLog),
             GetBriefingTool(service: briefing), CalendarReadTool(calendar: calendar), CalendarCreateTool(calendar: calendar),
@@ -537,6 +539,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         remote?.stop()
+        StayAwake.shared.stop()
         Supervisor.noteCleanExit()
         wake?.stop()
         kokoro?.stop()

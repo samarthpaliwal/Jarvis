@@ -64,7 +64,7 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 |------|-----------|-------------|
 | 0 automatic | read-only, runs on Anthropic's side | `web_search`, `web_fetch` |
 | 0 automatic | read-only | `system_status`, `file_search`, `file_read`, `get_location_context`, `actions_today`, `get_briefing`, `calendar_read`, `email_search`, `email_read`, `notion_search` |
-| 1 free | reversible, logged, undoable | `open_app`, `google_search`, `set_volume`, `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
+| 1 free | reversible, logged, undoable | `open_app`, `google_search`, `open_website`, `lights`, `set_volume`, `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
 | 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
 | 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |

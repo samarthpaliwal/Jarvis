@@ -270,6 +270,14 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
                                               info: "Create an internal integration at notion.so/profile/integrations, share your Student OS page with it, and paste the secret. Stored in the Keychain.",
                                               account: NotionClient.tokenAccount, notch: notch)
         })
+        integ.addItem(.separator())
+        let goveeReady = KeychainStore.read(account: GoveeClient.keyAccount) != nil
+        let gv = NSMenuItem(title: "Govee lights: \(goveeReady ? "connected" : "not connected")", action: nil, keyEquivalent: ""); gv.isEnabled = false; integ.addItem(gv)
+        integ.addItem(ClosureMenuItem(title: goveeReady ? "Change Govee API Key…" : "Connect Govee Lights…", symbol: "lightbulb") { [notch] in
+            MenuBarController.promptForSecret(title: "Govee API key",
+                                              info: "In the Govee Home app: Profile → Settings (gear) → Apply for API Key. Govee emails the key; paste it here. Stored in the Keychain behind Touch ID. Light commands are then sent to Govee.",
+                                              account: GoveeClient.keyAccount, notch: notch)
+        })
         let integItem = NSMenuItem(title: "Integrations", action: nil, keyEquivalent: "")
         integItem.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         integItem.submenu = integ
@@ -631,6 +639,12 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         login.state = LaunchAtLogin.isEnabled ? .on : .off
         login.isEnabled = LaunchAtLogin.isAvailable && !Supervisor.isInstalled   // the supervisor already starts it at login
         menu.addItem(login)
+        let awake = ClosureMenuItem(title: "Stay Awake While Plugged In", symbol: "bolt") { [notch] in
+            StayAwake.shared.enabled.toggle()
+            notch.flash(StayAwake.shared.enabled ? "Staying awake while plugged in (closing the lid still sleeps)" : "Normal sleep")
+        }
+        awake.state = StayAwake.shared.enabled ? .on : .off
+        menu.addItem(awake)
 
         let keepAlive = ClosureMenuItem(title: "Keep Running (restart after a crash, start at login)", symbol: "arrow.triangle.2.circlepath") { [weak self] in
             guard let self else { return }

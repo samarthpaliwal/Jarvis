@@ -15,13 +15,13 @@ STAGES = [
     ("wake",     "1 Wake word",          "WakeWordTests WakeConfigTests PhraseSpotterTests AudioRecoveryTests"),
     ("stt",      "2 Speech to text",     "EndpointerTests EchoGuardTests AudioCodecTests"),
     ("intent",   "3 Intent (Claude)",    "IntentStageTests ClaudeClientTests SSEParsingTests HistoryRepairTests AgenticChainTests OllamaShapeTests WebSearchTests SessionMemoryTests MemoryStoreTests LoopGuardTests BudgetTests RetryTests SkillLibraryTests HostedBrainTests"),
-    ("actions",  "4 Actions (tools)",    "DispatcherTests DenylistGuardTests SecretRedactorTests InjectionScannerTests ToolTimeoutTests DeadlineTests CalendarToolsTests CalendarMatcherTests CameraToolTests GoogleSearchToolTests CameraFilesTests VisionTests LiveToolTests MusicTests ScreenTests ContactBookTests OrganizePlannerTests NotionParsingTests GmailParsingTests DateParsingTests BriefingLogicTests LoopbackListenerTests"),
+    ("actions",  "4 Actions (tools)",    "DispatcherTests DenylistGuardTests SecretRedactorTests InjectionScannerTests ToolTimeoutTests DeadlineTests CalendarToolsTests CalendarMatcherTests CameraToolTests GoogleSearchToolTests OpenWebsiteRulesTests OpenWebsiteToolTests LightsToolTests LightColorTests CameraFilesTests VisionTests LiveToolTests MusicTests ScreenTests ContactBookTests OrganizePlannerTests NotionParsingTests GmailParsingTests DateParsingTests BriefingLogicTests LoopbackListenerTests"),
     ("tts",      "5 Text to speech",     "SentenceChunkerTests SpeechQueueTests SpeechOutputTests VoicePickerTests KokoroTests VoiceTests"),
     ("pipeline", "Pipeline end to end",  "PipelineMachineTests PipelineStagesTests PipelineFailureTests SpokenFailureTests ConversationFlowTests LatencyTests TraceTests BudgetPipelineTests"),
     ("voiceid",  "Voice ID",             "VoiceCaptureTests VoiceGateRuleTests SentenceRecorderTests VoiceEnrollmentTests VoiceGatedApprovalTests VoiceMathTests SpeakerVerifierTests ECAPAModelTests"),
     ("remote",   "Remote access",        "TailnetTests HTTPParserTests HTTPServerTests RemoteTokenTests RemoteAPITests RemoteAccessServiceTests RemoteTurnTests WebAppTests PairingTests"),
     ("privacy",  "Privacy and keys",     "PrivacyTests RetentionTests SecretVaultTests"),
-    ("app",      "App and settings",     "ConfigTests SettingsTests LenientConfigTests ModeScorerTests QuietHoursTests NotchGeometryTests SupervisorTests HangWatchdogTests"),
+    ("app",      "App and settings",     "ConfigTests SettingsTests LenientConfigTests ModeScorerTests QuietHoursTests NotchGeometryTests SupervisorTests HangWatchdogTests StayAwakeTests"),
 ]
 args = sys.argv[1:]
 if args and args[0] == "--list":
