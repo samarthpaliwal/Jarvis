@@ -1,1403 +1,167 @@
 # Jarvis
 
-A personal voice assistant that lives in the MacBook notch. Menu bar app, no Dock icon,
-on-device wake word, on-device speech recognition, Claude for the brain, tiered permissions
+A personal voice assistant that lives in the MacBook notch. Say "Hey Jarvis", ask for something, and it
+answers out loud and gets it done: calendar, email, notes, music, the camera, files, the web. It is a
+native macOS menu bar app written in Swift, with the wake word, speech recognition and voice
+verification running on-device, Claude doing the thinking, and every action passing a permission system
 enforced in code.
 
-**Status: Milestone 6 of 6 — feature complete.** Menu bar app, notch UI, on-device wake word, speech in/out, Claude with 29 tools behind the permission dispatcher, calendar / email / Notion / briefing, automatic context modes, proactive nudges, Mac maintenance. See the changelog at the bottom.
+<!-- demo -->
 
-## Requirements
+## What it does
 
-- macOS 14 or newer (built and tested on macOS 26 / Xcode 27.2, Apple Silicon)
-- Xcode command line tools (`xcode-select --install`) or full Xcode
+- **Hands-free.** On-device wake word, on-device speech recognition, a natural on-device voice (Kokoro).
+  Follow-up questions without repeating the wake word.
+- **Gets things done.** 43 tools behind one dispatcher: calendar and reminders, Gmail, Notion, Spotify and
+  Apple Music, files, apps, the screen and the camera, web search. Multi-step requests chain tools.
+- **Asks before anything risky.** Sending, deleting, shell commands and anything involving money need a
+  spoken "yes" or a tap, in your voice. Keys, passwords, `~/.ssh` and anything on the denylist are refused
+  outright, even if you ask.
+- **Knows it is you.** Speaker verification (ECAPA-TDNN, on-device) gates approvals.
+- **From your phone.** A mic-button web app, a hands-free call mode and a Siri shortcut, over your private
+  Tailscale network. No public port, no account, no app store.
+- **Local-first.** No audio leaves the Mac. A Privacy menu shows exactly what does (text to Claude), and
+  logs are pruned on a schedule.
+- **Stays up.** A launchd supervisor, a hang watchdog, retries, a daily spending cap, and a spoken reason
+  when something fails.
 
-## Build, run, test
+## How it works
+
+Every request passes through five stages. Each stage sits behind a small Swift protocol
+([Pipeline/Stages.swift](Sources/JarvisCore/Pipeline/Stages.swift)), so it can be swapped or tested alone.
+
+```mermaid
+flowchart LR
+    mic(["Microphone"]) --> wake
+    phone(["Phone app · Siri"]) -. Tailscale .-> api["Remote API"]
+    api --> stt
+    api --> intent
+
+    subgraph mac ["On this Mac"]
+        wake["1 · Wake word<br/>openWakeWord"] --> stt["2 · Speech to text<br/>SpeechAnalyzer"]
+        stt --> voiceid["Voice ID<br/>ECAPA-TDNN"]
+        stt --> intent["3 · Intent<br/>Brain: agent loop"]
+        intent --> actions["4 · Actions<br/>ToolDispatcher"]
+        actions --> guard{"Tier · denylist<br/>approval"}
+        voiceid --> guard
+        guard --> tools["43 tools"]
+        tools --> intent
+        intent --> tts["5 · Text to speech<br/>Kokoro"]
+    end
+
+    intent <-->|"text only"| claude[("Claude API")]
+    tools <--> services[("Calendar · Gmail · Notion<br/>Spotify · files · camera")]
+    tts --> speaker(["Speaker · notch UI"])
+    tts -.-> api
+```
+
+`ConversationController` wires the stages together and moves between five states (`idle`, `listening`,
+`thinking`, `awaitingApproval`, `speaking`) through a single transition table. One request ID follows a
+request through every stage into `trace.jsonl`, so latency is measured per stage.
+
+| Stage | Folder | Runs |
+|---|---|---|
+| 1 Wake word | [`Wake/`](Sources/JarvisCore/Wake) | on-device (ONNX Runtime) |
+| 2 Speech to text | [`STT/`](Sources/JarvisCore/STT) | on-device (Apple SpeechAnalyzer) |
+| 3 Intent | [`Intent/`](Sources/JarvisCore/Intent) | Claude, streaming, with prompt caching; a local model offline |
+| 4 Actions | [`Actions/`](Sources/JarvisCore/Actions) | on-device; three permission tiers checked before every call |
+| 5 Text to speech | [`TTS/`](Sources/JarvisCore/TTS) | on-device (Kokoro, Apple); cloud voices optional |
+
+More in [docs/architecture.md](docs/architecture.md).
+
+## Quick start
+
+Requires macOS 14 or newer on Apple Silicon and the Xcode command line tools.
 
 ```bash
-# Build Jarvis.app into ./build and launch it
-scripts/run.sh
-
-# Just build the .app (release by default; pass "debug" for a debug build)
-scripts/build-app.sh
-
-# Unit tests
-swift test
-
-# Equivalent with xcodebuild (SwiftPM package, no .xcodeproj needed)
-xcodebuild -scheme Jarvis -destination 'platform=macOS' build
-xcodebuild -scheme JarvisCore -destination 'platform=macOS' test
+git clone https://github.com/samarthpaliwal/Jarvis.git
+cd Jarvis
+scripts/fetch-models.sh          # wake-word models
+scripts/make-dev-cert.sh         # a stable signing identity, so macOS remembers permissions
+scripts/install-keyhelper.sh     # saved keys unlock with Touch ID
+scripts/run.sh                   # build Jarvis.app and launch it
 ```
 
-`swift run Jarvis` also works for quick iteration, but without the `.app` bundle macOS will
-not honour `LSUIElement`, permission prompts will be attributed to your terminal, and
-Launch at Login is unavailable.
+Then, from the Jarvis menu bar icon: **Set API Key…** (an [Anthropic API key](https://console.anthropic.com/)),
+grant the microphone when asked, and say **"Hey Jarvis, what's left today?"**
 
-### Code signing
+Optional, each one command or one menu item:
 
-The build script signs ad-hoc by default. macOS ties Microphone, Speech, Calendar and
-Automation grants to the code signature, and an ad-hoc signature changes every build, so you
-will be re-prompted after each rebuild. Fix it once with a stable self-signed identity (this keeps the
-permission grants; the saved keys are a separate matter, see *Keys: Touch ID instead of the keychain
-password*):
-
-```bash
-scripts/make-dev-cert.sh
-```
-
-```bash
-JARVIS_SIGN_IDENTITY="Jarvis Dev" scripts/run.sh
-```
-
-(Or make it in Keychain Access → Certificate Assistant → Create a Certificate → name `Jarvis Dev`,
-type Code Signing.)
-
-## Architecture
-
-A request is five stages, each behind a small interface in
-[Pipeline/Stages.swift](Sources/JarvisCore/Pipeline/Stages.swift). Any stage can be replaced or tested alone.
-
-```
- WakeSource ──▶ Transcriber ──▶ IntentEngine ──▶ ActionRunner ──▶ SpeechOutput
-  (heard)       (transcribed)     (intent)         (action)        (spoken)
- openWakeWord   SpeechAnalyzer    Claude + tools   ToolDispatcher  Kokoro / Apple /
-                                  (Ollama offline) (tiers, denylist) ElevenLabs / OpenAI
-```
-
-`ConversationController` wires the stages together. It changes state only through one transition table,
-[Pipeline/PipelineMachine.swift](Sources/JarvisCore/Pipeline/PipelineMachine.swift):
-
-| State | Meaning | Leaves on |
-|-------|---------|-----------|
-| `idle` | waiting for the wake word | wake, typed text, an announcement |
-| `listening` | microphone to text | transcript, no speech, "thanks", echo dropped, recognizer failure |
-| `thinking` | Claude is deciding or tools are running | first sentence of the reply, an approval request |
-| `awaitingApproval` | a Tier 2 action waits for yes or no | yes, no, or timeout |
-| `speaking` | the reply is being spoken | reply finished, talking over it, the wake word |
-
-"Stop", the close button, and the menu return to `idle` from any state. A transition the table does not
-allow is logged as `Illegal transition` and counted. The tests run the whole pipeline on fakes in strict
-mode, where such a transition fails the turn.
-
-Each request carries one ID through all five stages; see [Logs and tracing](#logs-and-tracing).
-
-## Project layout
-
-```
-Sources/Jarvis/            Entry point (NSApplication boot)
-Sources/JarvisObjC/        Objective-C shim: NSException → Swift error
-Sources/JarvisCore/
-  Pipeline/                Stage interfaces, state machine, ConversationController (the orchestrator)
-  Wake/                    Stage 1: mic capture (AVAudioEngine → 16 kHz) + openWakeWord on ONNX Runtime
-  STT/                     Stage 2: Transcriber interface, SpeechAnalyzer + SFSpeechRecognizer, endpointer, echo guard
-  Intent/                  Stage 3: agent loop (Brain), streaming Claude client, Ollama client, system prompt
-  Actions/                 Stage 4: tiers, denylist guard, dispatcher, action log, undo stack
-  Actions/Tools/           One small file per tool
-  TTS/                     Stage 5: SpeechOutput interface, Apple / Kokoro / ElevenLabs / OpenAI engines, sentence chunker
-  App/                     AppDelegate (wiring), menu bar, mode manager, debug hooks
-  Config/                  JSON models, tuning and environment overrides, Keychain store
-  Remote/                  Remote access: Tailscale address, HTTP server, tokens, the API, headless turns
-  Logging/                 jarvis.log, trace.jsonl, request tracing
-  NotchUI/                 Panel, floating card, HUD, SwiftUI views, view model
-  Integrations/            EventKit calendar/reminders, Google OAuth + Gmail, Notion API, briefing, weather
-  Context/                 Signals (location, Wi-Fi, power, displays, calendar), mode scorer and setup
-  Proactive/               Scheduler (morning briefing, nudges, breaks, battery), call detection
-  Vision/                  Camera session, live feed, photo and video, frame sources (camera, glasses hook)
-  VoiceID/                 Speaker verification: filterbank features, ECAPA-TDNN, voiceprint, enrollment, gate
-  Net/                     HTTP retries and timeouts, spend guard
-  Memory/  Skills/  Music/ Long-term memory, skills, Spotify and Music control
-  Resources/Models/        melspectrogram / embedding / hey_jarvis ONNX models (Apache-2.0)
-Tests/JarvisCoreTests/     Unit tests (`swift test`)
-config/                    Default profile.json, allowed-folders.json, denylist.json, modes.json
-voice/                     Kokoro speech server (Python)
-scripts/                   build-app.sh, run.sh, latency-report.py, setup scripts
-.env.example               Every environment override, documented
-```
-
-## Configuration
-
-Four JSON files hold every personal fact and safety rule. The defaults live in `config/`
-and are bundled into the app. On first launch they are copied to
-
-```
-~/Library/Application Support/Jarvis/config/
-```
-
-and **that copy is the live one**: edit it, then choose *Reload Config* from the menu bar.
-Bundled defaults never overwrite your edits. Set `JARVIS_CONFIG_DIR` to point somewhere else.
-
-| File | What it holds |
-|------|---------------|
-| `profile.json` | Name, school, time zones, routine, assistant tone, briefing time, Claude model, data sources |
-| `allowed-folders.json` | Folders Jarvis may read and organize. Everything else is off limits. |
-| `denylist.json` | Tier 3: paths, file patterns, apps and shell patterns Jarvis refuses to touch, even when asked. A hard-coded floor (`~/.ssh`, Keychains, `.env`, `sudo`, …) is always merged in. |
-| `modes.json` | Home / Class / Study / Work / Road: triggers, voice, notch glow, briefing contents, and the setup each mode applies. Also the list of known places. |
-
-If a file fails to parse, Jarvis still launches with built-in defaults and shows the exact
-error in the menu bar.
-
-### Tuning and environment overrides
-
-Every threshold, limit, and timeout lives in `profile.json → tuning` (wake threshold, mic recovery
-timings, Claude effort and timeouts, tool budgets, approval timeout, speech ports). Nothing is a literal
-in the code; the definitions and defaults are in [Config/Settings.swift](Sources/JarvisCore/Config/Settings.swift).
-
-Any tuning field can be overridden by an environment variable named `JARVIS_` plus the field in upper
-snake case, for example `wakeThreshold` → `JARVIS_WAKE_THRESHOLD`. A menu-bar app has no shell
-environment, so Jarvis also reads an env file:
-
-```bash
-cp .env.example ~/Library/Application\ Support/Jarvis/jarvis.env
-```
-
-Uncomment what you want, then restart Jarvis. The real process environment wins over the file, and the
-file wins over `profile.json`. Overrides that took effect are logged at startup, and a value that is not a
-valid number is reported in the menu bar and ignored.
-
-**Secrets never go in the env file.** API keys stay in the macOS Keychain. Jarvis ignores any variable
-in `jarvis.env` whose name contains KEY, TOKEN, SECRET, PASSWORD, or CREDENTIAL, and says so in the log.
-`.gitignore` excludes env files, logs, databases, and voice enrollment data.
-
-## Using Milestone 1
-
-Click the waveform icon in the menu bar:
-
-- **Status line**: current phase and whether a notch was detected (`notch 185×32` on a
-  14"/16" MacBook Pro, `no notch, floating pill` on external or older displays).
-- **Mode**: switch manually between Home, Class, Study, Work, Road. The notch flashes a
-  one-line confirmation, except for Class mode which is silent.
-- **Do Not Disturb Jarvis**: toggle (persisted; it gates proactive features in Milestone 6).
-- **Demo Notch**: drive the UI through listening, thinking, responding, and the briefing
-  card without a microphone or an API key.
-- **Open Config Folder / Open Logs Folder / Reload Config / Re-measure Notch**.
-- **Launch at Login**: registers the built `.app` via `SMAppService`.
-
-Hover the notch while idle to peek at the current mode and time.
-
-### Test hooks (for scripts and screenshots)
-
-```bash
-kill -USR1 $(pgrep -x Jarvis)   # run the demo conversation
-kill -USR2 $(pgrep -x Jarvis)   # show the morning briefing card
-tail -f ~/Library/Logs/Jarvis/jarvis.log
-```
-
-## Wake word (Milestone 2)
-
-**Engine: [openWakeWord](https://github.com/dscripka/openWakeWord) "hey jarvis" v0.1 on ONNX Runtime**,
-via Microsoft's `onnxruntime-swift-package-manager` (macOS 14+). Chosen over Picovoice Porcupine
-because it needs no account or access key, is Apache-2.0, ships a pretrained *"hey jarvis"*
-(Porcupine's built-in is plain *"jarvis"*), and runs entirely on-device. Nothing leaves the
-Mac until the wake phrase fires. The `WakeWordDetector` protocol in `Wake/` lets you swap in
-Porcupine or a custom model later.
-
-Pipeline (mirrors openWakeWord's streaming path): 80 ms chunks → mel spectrogram → 96-d speech
-embedding over the last 76 frames → wake classifier over the last 16 embeddings → score 0…1.
-Threshold 0.5, 2 s cooldown. Inference is batched 2 chunks at a time (one wakeup per 160 ms), which adds at
-most 80 ms to detection latency.
-
-What you'll see: the notch expands with an iridescent Siri-style glow, a matching glow runs
-around the screen edge, and a live waveform shows mic level. In Milestone 2 Jarvis listens
-for 4 s, "thinks", and replies with a placeholder line; real transcription is Milestone 3.
-
-Things that are handled: AirPods or another input device connecting mid-session (capture
-restarts on the new device), wake from sleep (capture restarts after 1.5 s), mic permission
-denied (menu shows a shortcut to the Privacy pane; everything else keeps working).
-
-Menu: *Wake Word Listening* pauses scoring without closing the mic; *Wake Jarvis Now (test)*
-fires the same path as a real detection. The status line shows ms/chunk, peak score, and count.
-
-Debugging:
-
-```bash
-JARVIS_WAKE_DEBUG=1 build/Jarvis.app/Contents/MacOS/Jarvis   # logs every score ≥ 0.1 and mic levels
-say "hey jarvis"                                            # quick speaker-to-mic test
-```
-
-Models were downloaded from the openWakeWord v0.5.1 release and are checksummed by
-`scripts/fetch-models.sh`.
-
-## Speech in and out (Milestone 3)
-
-**Speech-to-text** sits behind the `Transcriber` protocol in `STT/`:
-
-- `AnalyzerSpeechTranscriber` — Apple's **SpeechAnalyzer** (macOS 26+). Fully on-device, needs only the
-  microphone permission, downloads the English model once (~a minute on first run, logged).
-  This is what runs on your Mac.
-- `AppleSpeechTranscriber` — `SFSpeechRecognizer` with on-device recognition, used on macOS 14–15.
-  It needs the Speech Recognition permission **and** Dictation enabled in System Settings → Keyboard
-  (otherwise macOS reports "Siri and Dictation are disabled"). `JARVIS_FORCE_SFSPEECH=1` forces it.
-
-To swap in Deepgram or whisper.cpp, conform to `Transcriber` (five methods) and change one line in
-`TranscriberFactory`.
-
-**When you've finished talking** is decided by `Endpointer`: 1.3 s of unchanged transcript after some
-speech, 6 s with no speech at all, or 20 s hard cap. Tune these in `profile.json → speech`.
-
-**Text-to-speech** sits behind `SpeechOutput`. `AppleSpeechOutput` uses `AVSpeechSynthesizer` and picks
-the best installed English voice: Premium > Enhanced > Default, skipping novelty voices. Your Mac
-currently has only default-quality voices, so Jarvis uses Samantha. For a much better voice:
-System Settings → Accessibility → Spoken Content → System Voice → Manage Voices, download e.g.
-**Ava (Premium)** or **Zoe (Premium)**, then pick it under *Voice* in the Jarvis menu. The choice is
-saved; `profile.json → assistant.voiceIdentifier` is the config-file alternative.
-
-**Barge-in**: while Jarvis is talking, the wake word keeps running ("Hey Jarvis" interrupts and
-starts a new turn) and the transcriber listens only for "stop" (stops speaking).
-
-**Mode awareness**: Class mode has `voice.enabled: false`, so replies are text-only in the notch.
-*Speak Replies* in the Voice menu is a global mute on top of that.
-
-Milestone 3 replies with an echo of what it heard; Claude takes over in Milestone 4.
-
-## Notch behaviour
-
-- Idle: the black island is exactly the size of the physical notch, so it is invisible.
-- Listening: expands sideways with a rotating iridescent glow (Siri palette) and a live waveform;
-  the same glow traces the screen edge in a click-through overlay.
-- Thinking: dimmer, slower glow and pulsing dots.
-- Responding: expands downward with the reply and any cards, then collapses after a few
-  seconds. It stays open while the pointer is over it.
-- Works on every Space and over full-screen apps (non-activating panel above the menu bar).
-- Follows the display with a notch; falls back to a menu-bar-height pill at top center
-  otherwise. Re-measures on display changes and on wake from sleep.
-- Honours *Reduce Motion*: fades instead of springs, no pulsing.
-
-## Permissions
-
-Permissions are requested on first use only:
-
-| Permission | Why | Milestone |
-|-----------|-----|-----------|
-| Microphone | Wake word and speech capture. Audio stays on-device until the wake word fires. | 2 ✔ |
-| Speech Recognition | Only for the macOS 14–15 `SFSpeechRecognizer` fallback. SpeechAnalyzer on macOS 26 does not need it. | 3 ✔ |
-| Calendars, Reminders | Briefing, `calendar_read`/`calendar_create`, `set_reminder`. | 5 ✔ |
-| Automation (Apple Events) | Controlling Music, Finder, Notes, and app quit/hide for mode setup. | 5–6 |
-| Location (While Using) | Home / Class / Work / Road detection and Wi-Fi name. Coordinates never leave the Mac. | 6 ✔ |
-
-Accessibility and Full Disk Access are **not** requested. If a feature would need them, it
-will be optional and documented here first.
-
-## Claude (Milestone 4)
-
-**API key.** Jarvis menu → *Set API Key…*: paste with ⌘V or click *Paste from Clipboard & Save*.
-It is stored in the Keychain and released to Jarvis after Touch ID (see *Keys: Touch ID instead of the
-keychain password*). Jarvis's own saved keys are the only Keychain items it ever reads; tools cannot reach
-them. From a terminal, copy the key first, then:
-
-```bash
-scripts/set-api-key.sh
-```
-
-`ANTHROPIC_API_KEY` in the environment overrides the Keychain (handy for `swift run`).
-
-**Model.** `profile.json → claude.model` (default `claude-sonnet-5-5`), overridable with `CLAUDE_MODEL`.
-Requests stream over raw HTTPS (there is no official Swift SDK): `anthropic-version: 2026-10-21`,
-`output_config.effort: low` for snappy voice replies, and `thinking: between_tools` on Sonnet 5.5 so the
-model skips reasoning between tool calls. **Prompt caching**: the 29 tool schemas and the personality
-block are a byte-stable prefix with `cache_control` breakpoints; mode, clock, and undo state ride in a
-separate uncached system block. Measured: first turn writes ~9.9k tokens to cache, every following turn
-reads them and sends only ~700 fresh input tokens. The reply is spoken sentence by sentence as it streams, so
-you hear the first sentence while the rest is still arriving. A `refusal` stop reason becomes
-"I can't help with that one."
-
-**Web search.** Jarvis can search the web and read pages on its own, with no approval needed, using
-Anthropic's server-side `web_search` and `web_fetch` tools. Ask "who won the Wildcats game", "is the Rec
-open tonight", or "find the link for that Tinder internship". Searches run on Anthropic's side, so there is
-no extra key or service. Each search is billed by Anthropic per use on top of tokens. Settings live in
-`profile.json → web`:
-
-```json
-"web": { "enabled": true, "maxSearchesPerTurn": 5, "maxFetchesPerTurn": 3, "deepResearch": false }
-```
-
-`deepResearch: true` switches to the dynamic-filtering versions (`_20260209`), which run code over the results.
-They're better for long research but slower, and Claude tends to narrate the steps aloud, so voice keeps the
-basic versions. Search location follows the Mac's time zone: Tucson at home, Singapore when you're there.
-Every search is logged to `actions.log` with source `claude-server`. Results are treated as untrusted
-content, like email, so they can never start an action, and Tier 2 still needs your approval.
-
-**Conversation memory** lasts 10 minutes of inactivity or 24 messages; *Clear Conversation* resets it.
-**Offline:** a small local matcher still handles modes, volume, timers, opening apps, undo, and status.
-
-## Calendar, email, Notion, briefing (Milestone 5)
-
-**Calendar + Reminders: EventKit.** Reads every account already in macOS Calendar (Google included, and
-anything Notion Calendar syncs through it). First use prompts for Calendars and Reminders full access.
-Tools: `calendar_read`, `calendar_create` (undoable), `set_reminder` (Apple Reminders, undoable).
-Times accept ISO 8601, `YYYY-MM-DD HH:mm`, `tomorrow 3pm`, `friday 10am`, `in 20 minutes`.
-
-**Gmail: Google API with OAuth (PKCE, loopback redirect), read + compose scopes only.** One-time setup:
-
-1. console.cloud.google.com → create a project → *APIs & Services → Library* → enable **Gmail API**.
-2. *OAuth consent screen* → External, add yourself as a test user.
-3. *Credentials → Create OAuth client ID → Desktop app*. Copy the client ID and secret.
-4. Jarvis menu → *Integrations → Set Google OAuth Client…*, paste both (Keychain).
-5. *Integrations → Connect Gmail…* opens the browser; approve; the refresh token lands in the Keychain.
-
-Tools: `email_search` (Gmail query syntax), `email_read`, `email_draft` (creates a **draft**, never sends),
-and `email_send`, which sends a draft Jarvis created, only after your explicit yes (see *Multi-step requests
-and the confirmation gate*). Email bodies reach Claude wrapped as untrusted content.
-
-**Notion: internal integration token.** notion.so/profile/integrations → New integration → copy the
-secret → share your *Student OS // M Edition* page with the integration → Jarvis menu → *Integrations →
-Connect Notion…*. `profile.json → dataSources.notion` is pre-filled with your Student OS data sources
-(Homework / Exams / Classes) and their property names (`Assignment`, `Due`, `Status` with
-`Submitted`/`Graded` meaning done; `Exam`, `Date`). Tools: `notion_search`, `notion_create_note`
-(notes page under Student OS, or a homework / exam row with a date).
-
-**Briefing.** `get_briefing` (and *Briefing Now* in the menu, or `kill -USR2`) merges: today's remaining
-calendar events and reminders, Notion homework not yet submitted, the next deadlines, exams in the next
-14 days with days left (calendar titles matching exam/midterm/final/quiz plus the Notion Exams table),
-and assignment/exam emails from the last week. Missing sources are reported, never fatal. Synced
-calendar titles are cleaned ("[CSC120] Midterm 2 Today at 3:00pm" → "CSC120 Midterm 2") and deduped.
-In Class mode the summary also names the next class. The automatic morning briefing is Milestone 6.
-
-Config evolution: on launch Jarvis adds any new default keys to your `profile.json` copy without
-touching values you changed (logged as "Config: added new default keys").
-
-## Modes, proactive features, maintenance (Milestone 6)
-
-**Automatic modes.** `ContextDetector` samples every `pollingMinutes` and on display / wake events:
-location (Core Location, *When in Use*; a fix is read on-device and never leaves the Mac or reaches
-Claude), Wi-Fi name (needs the same Location permission on macOS 14+), power state, external
-displays, and the calendar event happening now. `ModeScorer` (pure, unit-tested) scores each mode's
-`triggers` in `modes.json`: known place +3, calendar keyword +4, power +1, displays +1, "away from
-every known place on battery/hotspot" +2 for Road. A mode you pick by hand (menu or voice) holds
-for `profile.json → proactive.manualOverrideHours` (2 h); *Mode → Automatic* clears it. Set
-`proactive.autoModes: false` to disable detection entirely.
-
-**Places.** Edit `modes.json → places`, or say *"Jarvis, remember this place as the gym"*
-(`remember_place`, uses the current fix + Wi-Fi). Your dorm sits inside the campus geofence, so the
-`home` place lists the **5G Honors** Wi-Fi: a Wi-Fi match scores higher than coordinates, which keeps
-Honors Village in Home mode. Ties keep the current mode, so modes don't flap.
-
-**Mode setup (all Tier 1, auto-applied, restorable).** On entering a mode Jarvis runs its `setup`
-block through the dispatcher with source `mode`, so Tier 2 is structurally impossible: volume,
-brightness (built-in display), quit / hide / open apps, and Focus. The previous state is snapshotted;
-leaving the mode or saying *"undo that"* restores it. Focus has no public API, so create Shortcuts
-named **`Jarvis Focus: Do Not Disturb`**, **`Jarvis Focus: Work`** (each one action: *Set Focus*) and
-**`Jarvis Focus Off`**; `set_focus` runs them.
-
-**Proactive.** `ProactiveScheduler` ticks every minute and delivers only when *all* gates pass:
-Do Not Disturb off, outside quiet hours (`proactive.quietHoursStart/End`), not in a call or sharing
-(any camera in use, or Zoom / FaceTime / Teams / Webex running, Discord or Slack only when frontmost),
-and not in Class mode.
-
-- Morning briefing at `briefing.time`, or the first screen unlock after 5 am (`onFirstUnlock`), once a day.
-- Exam / deadline nudges at `briefing.nudgeDaysBefore` (7, 3, 1, 0), each said once.
-- Road mode: battery warning at `lowBatteryWarnPercent`, at most every 30 min.
-- Break reminders (off by default; menu toggle): after `breakAfterMinutes` of continuous activity in a
-  coding app (Xcode, VS Code, Cursor, Terminal…), idle time resets it.
-
-**Maintenance.**
-
-| Tool | Tier | What |
-|------|------|------|
-| `organize_folder` | 1 | Desktop / Downloads → `Sorted/<Category>/` (or by month). Move only, logged to `~/Library/Logs/Jarvis/moves.json`, one undo puts everything back. `dry_run` previews. Flags files over `largeFileMB` or older than `oldFileDays`. |
-| `app_health` | 0 | Is it running, memory, last log lines (`~/Library/Logs/<name>/`). |
-| `restart_app` | 2 | Quit + relaunch one named app, after approval. |
-| `performance_report` | 0 | Memory pressure, top memory/CPU, free disk, biggest caches, LaunchAgents, suggested actions. |
-| `clear_caches` | 2 | Moves named `~/Library/Caches/<x>` folders to the **Trash** (recoverable), after approval. |
-
-Never, even with approval: emptying the Trash, deleting outside folders Jarvis created, system folders,
-security settings, `sudo`.
-
-**Typing instead of talking:** *Ask by Text…* in the menu runs the same pipeline without the mic.
-
-## Iron Man mode: persona, "Wake up, Daddy's home", full-screen HUD
-
-**Persona.** `profile.json → assistant.persona: "ironman"` adds JARVIS's manner to the system prompt:
-composed, dry British understatement, "sir" now and then, flight-check status reports, no verbatim film
-quotes. The voice picker now prefers British voices (Daniel, Oliver, Kate, Serena); download a Premium
-one in System Settings → Accessibility → Spoken Content for the full effect.
-
-**Coming home.** When Jarvis sees your home Wi-Fi after 20+ minutes away (or wakes from sleep at
-home), an *arrival window* opens for `wake.arrivalWindowMinutes` (10). During it:
-
-- saying **"Wake up, Daddy's home"** (or just "Daddy's home") runs the **homecoming scene**;
-- saying **"Hey Jarvis"** also runs it (`wake.homecomingOnHeyJarvis`), once; the next "Hey Jarvis" is a normal turn.
-
-Outside the window "Hey Jarvis" behaves as usual, and *"I'm home"* in any conversation runs the scene
-through the `welcome_home` tool. The scene: full-screen HUD, a welcome line in character, Home mode,
-then today's status.
-
-How the second phrase works, honestly: openWakeWord only ships trained models for a few phrases, so
-"Daddy's home" is spotted with on-device SpeechAnalyzer running on the mic stream. That costs about
-**28 % CPU** while it runs, which is why it only runs inside the arrival window (`wake.alwaysSpotPhrases`
-turns it on permanently if you accept the cost). Phrases and aliases live in `profile.json → wake.phrases`.
-
-**Full-screen HUD.** An arc reactor that spins faster while thinking and pulses with your voice, grid
-backdrop, flight-check readouts (time, power, memory, disk, mode) on the left, today's items on the
-right, transcript and reply along the bottom. Click or press Esc to dismiss; it fades on its own
-`hud.dismissAfterSeconds` after a turn. It appears for scenes by default; *Full-Screen HUD for Every
-Conversation* in the menu (or "Jarvis, full screen" → `set_display_mode`) makes every turn take the
-screen. Reduce Motion freezes the rings.
-
-**Which display.** `profile.json → hud.preferredDisplay` ("Odyssey G5") puts the HUD on that monitor
-whenever it is connected, and on the notch screen otherwise. The menu shows which display is in use.
-The notch pill and edge glow always stay on the built-in display.
-
-**A proper conversation.** After each reply Jarvis keeps listening for `speech.followUpSeconds` (7 s)
-with a calmer glow and "Go on…" in the notch, so the next sentence needs no wake word. Say "thanks",
-"that's all", or "bye" to end; silence ends it quietly. *Conversation Mode* in the menu turns this off.
-**Cutting it off:** talk over Jarvis and it stops mid-sentence and takes what you said as the next turn
-(`speech.interruptOnSpeech`). The mic also hears Jarvis itself through the speakers, so words that
-mostly match what it is currently saying are ignored as echo; "stop" still works on its own. The HUD
-shows the last three exchanges.
-
-Test hooks: write `!homecoming`, `!arrive`, or `!hud` to `~/Library/Application Support/Jarvis/ask.txt` and
-`kill -INFO $(pgrep -x Jarvis)`.
-
-## Look, music, and voice (0.9)
-
-**Floating card instead of the notch.** Jarvis now appears as a dark card at the bottom of whichever
-screen your mouse is on, only while it is listening, thinking, or answering. Nothing sits near the menu
-bar, and there is no glow or halo. Click × to dismiss and stop it talking. `profile.json → ui`:
-`style` (`floating` or `notch`), `screen` (`active` or a display name like `"Odyssey G5"` to pin it),
-`position` (`bottom`, `center`, `top`), `halo` (`false`). The full-screen HUD is off for normal
-conversations (menu toggle) and still used for the homecoming scene.
-
-**Music.** The `music` tool drives Spotify (or Apple Music) through AppleScript: play, pause, next,
-previous, what's playing, volume, shuffle, and **play by name**. macOS asks once to let Jarvis control
-Spotify. Playing a specific song needs a free Spotify developer app for search (no login): Jarvis menu →
-Integrations → *Set Spotify Client…* (steps in the dialog). Without it, Jarvis opens Spotify's search
-for the song so one click plays it.
-
-**Voice.** macOS hides its smoother Siri and Premium voices from third-party apps, so Jarvis on its own
-only gets the basic voices. The default fix is free:
-
-**Kokoro (free, on-device, no key).** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is an
-Apache-2.0 neural voice that runs locally through `kokoro-onnx`. Install once (~200 MB):
-
-```bash
-scripts/setup-kokoro.sh
-```
-
-Jarvis then starts the voice server itself (127.0.0.1:8880 only) and stops it on quit. It works offline,
-nothing leaves the Mac, and there are no limits. Measured on the M4 Pro: about 0.6 s for a short sentence,
-1.9 s for ten seconds of speech; the voice server uses about 840 MB of memory and no CPU while idle. Pick the voice under Jarvis menu →
-Voice → Kokoro Voice: George (default), Lewis, Daniel, Fable (all British male), or American ones.
-
-Paid alternatives, also in the menu → Voice:
-- *Set ElevenLabs Key…* (most natural; default voice "Daniel", a deep British male; free tier available).
-- *Set OpenAI Key…* (gpt-4o-mini-tts, voice "fable", steered to sound like a calm British butler).
-
-Replies are spoken sentence by sentence while the rest streams; if the cloud voice fails or you're
-offline, that reply finishes on the Apple voice. Cloud voices send the reply text to that provider.
-
-## Ported from OpenJarvis
-
-[OpenJarvis](https://github.com/open-jarvis/openjarvis) (Stanford, Apache-2.0) is a Python/Rust/Tauri
-framework for local-first personal AI. Switching stacks would have dropped the native notch, wake word,
-and permission dispatcher, so instead these ideas were re-implemented in Swift:
-
-| From OpenJarvis | Here |
+| | |
 |---|---|
-| `memory_manage` / `user_profile_manage` (MEMORY.md, USER.md) + SQLite FTS5 memory | `memory` tool (Tier 1, undoable) writes `MEMORY.md` / `USER.md` in `~/Library/Application Support/Jarvis`, injected into every turn. Every exchange is indexed in `memory.db` (FTS5, secrets redacted first); `memory_search` answers "what did I ask you about…". Menu → Memory to open or forget history. |
-| `LoopGuard` | Blocks identical repeated tool calls, A↔B ping-pong, and more than 12 tool calls per turn. |
-| `SecretScanner` / `credential_stripper` | Every tool result is scrubbed for API keys, tokens, private keys, passwords, DB URLs and card numbers before Claude sees it. Memory refuses secrets. |
-| `InjectionScanner` | Untrusted content (email, web, files, calendar) matching injection patterns is labelled with a warning Claude must heed and report. |
-| `jarvis.md` persona | Briefing rules: only facts from the data, skip missing sources silently, "sir" sparingly. |
-| Morning digest (LLM-synthesised, world section) | Briefings are now written by Claude in JARVIS's voice, with weather (Open-Meteo, keyless, city name only) and top headlines (Hacker News). New `weather` and `news_headlines` tools. Falls back to the template if Claude is slow or unreachable. |
-| Local-first engine (Ollama) | When offline, or always in **Private Mode** (menu), turns go to a local model through Ollama with a trimmed tool set. `profile.json → local.model` (default `qwen3.5:9b`). |
-| Skills (agentskills.io `SKILL.md`) | Folders in `~/Library/Application Support/Jarvis/skills`; the catalog goes in the prompt and `use_skill` loads one. Ships with `exam-prep`. Skills are instructions only; permission tiers still apply. |
+| A natural on-device voice | `scripts/setup-kokoro.sh` |
+| Voice ID | `scripts/setup-voiceid.sh`, then menu → Voice ID → Set Up |
+| Keep it running, start at login | `scripts/install-agent.sh` |
+| Gmail, Notion, Spotify | menu → Integrations |
+| Your phone | [docs/remote-access.md](docs/remote-access.md) |
 
-Not ported, on purpose: their Python agent zoo, the browser GUI, iMessage (needs Full Disk Access),
-Oura/Strava connectors, training/learning loops, and crypto "Pearl mining".
+Full instructions: [docs/setup.md](docs/setup.md).
 
-**Local model setup** (one time, ~6 GB download):
+## Tests
 
 ```bash
-ollama serve
+scripts/test.sh            # everything, reported per pipeline stage
+scripts/test.sh intent     # one stage: wake | stt | intent | actions | tts | pipeline | voiceid | remote | privacy | app
 ```
 
-```bash
-ollama pull qwen3.5:9b
+```
+  ✓ 1 Wake word               9 tests  0 failed
+  ✓ 2 Speech to text         13 tests  0 failed
+  ✓ 3 Intent (Claude)        66 tests  0 failed
+  ✓ 4 Actions (tools)        83 tests  0 failed
+  ✓ 5 Text to speech         13 tests  0 failed
+  ✓ Pipeline end to end      40 tests  0 failed
+  ✓ Voice ID                 33 tests  0 failed
+  ✓ Remote access            53 tests  0 failed
+  ✓ Privacy and keys         18 tests  0 failed
+  ✓ App and settings         33 tests  0 failed
 ```
 
-The menu shows "Local model: … ready" once it's available.
+Every stage is tested against fakes: no microphone, network, Keychain or real calendar is touched. The
+whole pipeline also runs end to end on fakes in a strict mode where an unexpected state change fails the test.
 
-## Remote access: reaching Jarvis from your phone
+## Safety, in one table
 
-Jarvis can be reached from anywhere over [Tailscale](https://tailscale.com), a private network between
-your own devices. Nothing is opened to the public internet: no port forwarding, no public address, no
-Tailscale Funnel. Free on Tailscale's Personal plan.
-
-### Step 1: put the Mac and the phone on one tailnet (once, about five minutes)
-
-**On the Mac**
-
-1. Download the Standalone app, the variant Tailscale recommends:
-   <https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg>. Open it and install.
-2. Open Tailscale. Its onboarding asks to add a VPN configuration (and to allow its system extension);
-   allow both. This is how the private network interface gets created.
-3. Sign in (Google, Apple, GitHub, or Microsoft). That account is your tailnet.
-4. Optional, for the checker below to show device names: Tailscale → Settings → *CLI integration* →
-   *Show me how* → *Install Now*.
-
-**On the phone**
-
-1. Install Tailscale from the App Store or Play Store.
-2. *Get Started*, allow the VPN configuration, and log in with the same account as the Mac.
-
-**Check it**
-
-```bash
-scripts/tailscale-check.sh
-```
-
-It reports this Mac's private address (`100.x.y.z`), whether a phone is on the tailnet, and that Funnel
-(the one Tailscale feature that publishes to the internet) is off. It changes nothing.
-
-Things worth knowing:
-
-- Tailscale must be on, on both devices, for the phone to reach the Mac. The Mac must be awake.
-- Addresses in `100.64.0.0/10` are never routed on the public internet. Only devices signed in to your
-  tailnet can reach them, over an encrypted WireGuard tunnel.
-- Do not turn on Tailscale Funnel for anything Jarvis serves. Jarvis never does.
-
-### Step 2: the remote API
-
-A small HTTP API inside Jarvis that wraps the same pipeline as the microphone: it takes a recording (or
-text), runs speech-to-text, Claude, the tools, and text-to-speech, and returns the reply as text and audio.
-It is written in Swift and lives in the app (`Sources/JarvisCore/Remote/`), not in a separate Python
-service, so it runs the real stages rather than a copy of them.
-
-**Turning it on.** It is off until you switch it on, and even then it listens only when both of these are
-true: at least one device has a token, and this Mac has a Tailscale address.
-
-1. Jarvis menu → *Remote Access* → *Allow Remote Access over Tailscale*.
-2. *Remote Access* → *Create Access Token…*, name the device ("Sam's iPhone"). The token is shown once.
-   From a terminal: `build/Jarvis.app/Contents/MacOS/Jarvis --remote-token "Sam's iPhone"`
-   (`--remote-tokens` lists them, `--remote-revoke <name>` removes one).
-
-The menu's first line says where it is listening (`Listening on 100.x.y.z:8787`), or why it is not.
-
-**Where it listens.** On this Mac's Tailscale address and nothing else: not `0.0.0.0`, not the Wi-Fi
-address, not `localhost`. If Tailscale is off, it does not listen at all, and it follows Tailscale coming
-and going. Connections from addresses outside the tailnet range are dropped before a byte is read. There
-is no setting that makes it listen on every address (`remoteBind` accepts `tailscale` or `loopback`; anything
-else means `tailscale`).
-
-**The token.** Every request to the pipeline needs `Authorization: Bearer <token>`. Without a valid one the
-answer is `401` for every path except the phone app's own static files, whether or not the path exists,
-and the request body is not read. Five wrong tokens
-in a minute from one device lock that device out for five minutes. Jarvis stores only a SHA-256 of each
-token (`~/Library/Application Support/Jarvis/remote/tokens.json`, owner-only, on the tool denylist), so the
-file does not let anyone in. Each device gets its own token; revoke one in the menu and it stops working
-at once. Revoking the last one closes the port.
-
-**Routes**
-
-| | | |
+| Tier | Examples | What happens |
 |---|---|---|
-| `GET /` | | The phone app (static files, no token). |
-| `POST /v1/pair` | `{"code": "123456"}` | Trades the code on the Mac's screen for a token. Exists only while a code is showing. |
-| `GET /v1/status` | | Is Jarvis there, is it busy, are the keys unlocked, is Voice ID set up. |
-| `POST /v1/ask` | a recording (WAV or M4A, up to 60 s), or `{"text": "…"}` | Runs the request. |
-| `POST /v1/approve?id=…` | a recording of "yes" or "no", or `{"id": "…", "decision": "yes"}` | Answers an approval. |
+| Free | read the calendar, play music, look something up | runs |
+| Approve | send an email, delete a file, run a shell command | says exactly what it will do, waits for your "yes" (in your voice) or a tap |
+| Never | Keychain, saved passwords, `~/.ssh`, `.env`, `sudo`, anything in `denylist.json` | refused, even if you ask |
 
-```bash
-TOKEN=…   # from Create Access Token
-MAC=100.x.y.z
+Content from emails, web pages and documents is treated as data, never as instructions. Every tool call
+is logged. Details: [docs/privacy-and-security.md](docs/privacy-and-security.md).
 
-curl -s -H "Authorization: Bearer $TOKEN" http://$MAC:8787/v1/status
+## Documentation
 
-curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-     -d '{"text": "what is left today?", "audio": false}' http://$MAC:8787/v1/ask
-
-say -o ask.wav --data-format=LEI16@16000 "What is seven times eight?"
-curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: audio/wav' --data-binary @ask.wav http://$MAC:8787/v1/ask
-```
-
-A reply:
-
-```json
-{"status": "done", "request_id": "r-15778b", "transcript": "What is 7 times 8?",
- "text": "Seven times eight is fifty-six.", "tools": [],
- "audio": {"mime": "audio/wav", "base64": "UklGR…"}}
-```
-
-Add `?audio=0` (or `"audio": false`) to get text only. `409` means Jarvis is busy with another request;
-`422` means nothing was heard.
-
-**What a remote request can and cannot do**
-
-- It is silent on the Mac: nothing is shown and nothing is spoken there. It is logged like any other
-  request (`jarvis.log`, `trace.jsonl` with source `remote`, `actions.log`, `conversations.log`).
-- One request at a time, shared with the Mac. If someone is talking to Jarvis at the Mac, a remote request
-  gets `409`; while a remote request runs, the wake word waits.
-- Everything that is free for a spoken request is free remotely. Everything on the Tier 3 list is refused,
-  as always.
-- **Anything that needs approval (email, messages, deleting, shell commands, money) needs your voice.**
-  Nobody is at the Mac to press Approve, so the request must be a recording, Voice ID must be set up, and
-  the voice must be yours. Then the reply is `"status": "needs_approval"` with the exact action, and the
-  action waits (60 s) for `POST /v1/approve`. A typed request, an unrecognized voice, or a Mac without Voice
-  ID gets a refusal instead, and the reply says why. There is no setting to relax this.
-- After a restart the saved keys are locked until Touch ID (see *Keys*). A remote request then gets a
-  reply saying so. If you want Jarvis to recover unattended, turn off *Keys → Require Touch ID to Unlock*.
-
-### Step 3: the phone app
-
-A web app with one big mic button, served by Jarvis itself: open the Mac's address in the phone's browser,
-pair once, and optionally *Share → Add to Home Screen* to keep it as an app. No App Store, nothing hosted
-anywhere else, no third-party scripts.
-
-- **Tap** the mic, talk, and it stops by itself when you pause (or tap again). The reply is shown and spoken.
-- **Type** in the field under the button instead, any time.
-- **Approvals** appear as a card with the exact action and *Yes, do it* / *No*; you can also tap the mic
-  and say yes or no. The rules above still apply: without a verified voice there is no card, only a refusal.
-- **Call** (under the mic) starts a hands-free conversation: the microphone stays open, Jarvis listens
-  again after every reply, and the screen stays on. It ends when you tap *Hang up*, say "bye" or "that's
-  all", leave the app, or nobody speaks for 90 seconds. Jarvis does not listen while it is talking, so it
-  cannot hear itself; tap the mic to cut a reply short. Approvals work the same way: it asks, you say yes
-  or no.
-- ••• opens settings: turn spoken replies off, or forget the pairing on this device.
-
-**Pairing.** Jarvis menu → *Remote Access* → *Pair a Phone…*, name the phone. The Mac shows a six-digit
-code for two minutes and the address to open. Type the code in the app; the phone gets its own token
-(listed in the menu, revocable there) and the Mac flashes a notice, so a pairing never happens unnoticed.
-A code works once; five wrong guesses cancel it. Outside those two minutes the pairing route does not
-exist. The app's own files (a page, a script, a stylesheet, icons) are the only thing served without a
-token; they are the same for everyone and hold no data.
-
-**The microphone needs HTTPS.** Browsers only allow the microphone on `https://` pages. Over plain
-`http://100.x.y.z:8787` the app works for typing, and says so. For the mic, let Tailscale put HTTPS in front:
-
-1. In the [Tailscale admin console](https://console.tailscale.com/admin/dns) → DNS: enable *MagicDNS*, then
-   under *HTTPS Certificates* choose *Enable HTTPS*.
-   **Know before you click:** certificates are recorded in public transparency logs, so this Mac's name and
-   your tailnet's name (`sams-macbook.tail1234.ts.net`) become publicly visible. Only the names: nothing
-   becomes reachable from the internet. If the Mac's name says more than you like, rename it in the admin
-   console first.
-2. Tell Jarvis to listen on this Mac only, so that Tailscale is the one thing facing the tailnet. Add to
-   `~/Library/Application Support/Jarvis/jarvis.env`, then restart Jarvis:
-
-   ```
-   JARVIS_REMOTE_BIND=loopback
-   ```
-
-3. Publish it to your tailnet (not the internet: that would be Funnel, which Jarvis never uses):
-
-   ```bash
-   tailscale serve --bg 8787
-   ```
-
-   It prints `Available within your tailnet: https://<mac>.<tailnet>.ts.net`. `tailscale serve status`
-   shows it, `tailscale serve reset` turns it off. (If your version does not know `--bg`, see
-   `tailscale serve --help`.)
-4. On the phone, with Tailscale on, open that `https://` address and pair.
-
-In this mode every request reaches Jarvis from `127.0.0.1`, so any program on the Mac can connect to the
-port too (it still needs a token), and the wrong-token lockout is shared by all devices.
-
-**What has and has not been tried.** In a desktop browser at phone size, against the running app:
-pairing with a code, a typed request and its reply, decoding the spoken reply, and uploading audio made by
-the page's recorder. The recorder's resampling and WAV encoding are tested under Node against the Mac's
-decoder. Pairing was also run in an iPhone simulator over the real `https://` tailnet address, and call
-mode was run for several turns against a simulated microphone. Not yet tried: a real phone's microphone,
-Add to Home Screen, and the service worker (the test browser does not run service workers).
-
-### "Hey Siri, Ask Jarvis"
-
-A Siri shortcut for when opening the app is too much: lock screen, AirPods, CarPlay, Watch.
-
-```bash
-scripts/make-siri-shortcut.sh        # writes build/Ask Jarvis.shortcut
-```
-
-1. Jarvis menu → *Remote Access* → *Create Access Token…*, name it `Siri`, *Copy and Close*.
-2. Double-click `build/Ask Jarvis.shortcut`, *Add Shortcut*, and paste the token when it asks.
-3. Say "Hey Siri, Ask Jarvis", then your request. iCloud copies the shortcut to your iPhone by itself.
-
-It dictates what you say (Apple's dictation, on the phone), sends the words to
-`POST /v1/ask?format=text` on your Mac over the tailnet, and speaks the plain-text reply. The file holds
-this Mac's tailnet address and no token. Because Siri sends words, not your voice, Jarvis cannot verify
-who is speaking: anything that needs approval is refused through Siri, and says so. The phone must be on
-Tailscale. Revoke the `Siri` token in the menu to switch it off.
-
-### Later: a real app icon (Capacitor)
-
-Not built. The pieces are in place so that wrapping the same web app in a native shell is packaging, not
-a rewrite:
-
-- **The web app is one self-contained folder**, `Sources/JarvisCore/Resources/WebApp/`: no build step, no
-  dependencies. That folder is what Capacitor calls `webDir`.
-- **It can be told where the Mac is.** Loaded from inside a native shell (`capacitor://localhost`) instead
-  of from the Mac, the pairing screen shows one more field for the Mac's Tailscale address and every
-  request goes there.
-- **The API can admit that origin.** `remoteAllowedOrigins` (empty by default) lists exact extra web
-  origins that may call the API from a browser, for example `capacitor://localhost,https://localhost`.
-  A listed origin still needs a token for everything; `*` is never accepted.
-- A native shell also removes the HTTPS requirement for the microphone, because the app's own pages are
-  not `http://`.
-
-When the time comes: `npm init @capacitor/app`, point `webDir` at that folder, add the iOS and Android
-platforms, add the microphone usage string, and set `JARVIS_REMOTE_ALLOWED_ORIGINS`.
-
-**Check it**
-
-```bash
-scripts/tailscale-check.sh      # “remote API is listening on 100.x.y.z:8787 and refuses requests without a token”
-swift test --filter "Remote|HTTP|AudioCodec|Tailnet|WebApp|Pairing"   # API, tokens, server, audio, approvals, the phone app
-```
-
-Settings (`profile.json → tuning`, or `JARVIS_…` in `jarvis.env`): `remotePort` 8787, `remoteBind`
-`tailscale`, `remoteMaxAudioSeconds` 60, `remoteApprovalTimeoutSeconds` 60, `remoteAllowedOrigins` empty.
-
-## Privacy: what leaves this Mac, and what is kept
-
-**Local-first.** Menu → *Privacy* lists, for the settings in use right now, what stays on this Mac and what
-leaves it. The same summary is written to `jarvis.log` at every start (`Privacy: No audio leaves this Mac. …`).
-
-| Stage | Data | Where it is processed |
-|---|---|---|
-| Wake word | microphone audio | this Mac (openWakeWord) |
-| Speech recognition | the audio of each request | this Mac (Apple SpeechAnalyzer, on-device) |
-| Voice ID | your voiceprint, each request's audio | this Mac |
-| Remote access | recordings from your phone | this Mac, over your tailnet |
-| Thinking | the request as text, the conversation, tool results | Anthropic (Claude) |
-| Looking | one camera frame or screenshot, only when you ask | Anthropic |
-| Web search | queries and page addresses, only when needed | Anthropic |
-| Speaking | the text of the reply | this Mac (Kokoro, Apple); ElevenLabs or OpenAI only if you choose those voices |
-| Gmail, Notion, Spotify, weather | what you ask about | that service, only when you ask |
-
-**No stage sends audio to the cloud.** The one that could is the fallback recognizer on older macOS for a
-language Apple cannot recognize on-device; there Jarvis refuses and says so rather than send your voice to
-Apple. That is your decision to change: `cloudSpeechRecognition` = `never` (default) or `allow`. If it is
-ever in effect, the Privacy menu's first line and the startup log say that audio leaves this Mac.
-Text does leave: Claude needs the words to answer. Nothing is sent anywhere until the wake word fires.
-
-**Retention.** Applied when Jarvis starts and once a day. `0` means keep forever.
-
-| What | Where | Kept | Setting |
-|---|---|---|---|
-| What was said, by you and by Jarvis | `~/Library/Logs/Jarvis/conversations.log` | 30 days | `retainConversationsDays` |
-| Per-request timings (no words) | `trace.jsonl` | 30 days | `retainTraceDays` |
-| Diagnostics | `jarvis.log` | 14 days | `retainLogDays` |
-| Every tool call: the audit trail | `actions.log` | 90 days | `retainActionsDays` |
-| Photos and videos you asked for | `~/Pictures/Jarvis`, `~/Movies/Jarvis` | forever; with a limit, older ones go to the Trash | `retainMediaDays` |
-| Recent chats for context | memory only | 30 minutes, gone on quit | `sessionMemoryMinutes` |
-| Long-term memory (facts you told it) | `memory.db` | until you remove them | |
-| Your voiceprint | `voiceprint/` | until *Voice ID → Forget* | |
-| Audio of requests, camera frames for "look" | not stored | | |
-| Remote access tokens (hashes) | `remote/tokens.json` | until revoked | |
-| Spending totals | `spend.json` | amounts only | |
-
-Logs also rotate by size (5 MB, three old files). Jarvis only ever prunes its own four log files and, if
-you set a limit, files it named itself in its own two media folders, and those go to the Trash, not away.
-API keys are in the Keychain behind Touch ID and are redacted from tool output and logs.
-
-## Keys: Touch ID instead of the keychain password
-
-Jarvis keeps its API keys and tokens (Claude, Google, Notion, Spotify, ElevenLabs, OpenAI) in the macOS
-Keychain. On their own, Keychain items are approved per program, and for an app without an Apple
-Developer signature "the program" means the exact binary. Every rebuild made a new binary, so macOS asked
-for the keychain password again, sometimes in the middle of a conversation, underneath the HUD.
-
-So the keys now sit behind a small separate program, `jarvis-keyhelper`:
-
-```bash
-scripts/install-keyhelper.sh     # once. It is deliberately NOT rebuilt when Jarvis is.
-```
-
-- **It never changes, so its approval sticks.** It is installed to
-  `~/Library/Application Support/Jarvis/bin/` and left alone. Rebuilding Jarvis does not touch it.
-- **Touch ID unlocks it.** When Jarvis starts, the helper asks for Touch ID (or the Mac's password, which
-  is macOS's own fallback) and then hands all the keys over in one go. Jarvis holds them in memory until
-  it quits. Nothing is asked again while it runs, and never during a conversation.
-- **Only Jarvis can ask.** The helper checks that the program calling it is a validly signed
-  `com.samarth.jarvis` carrying the same certificate as itself, and refuses anything else:
-
-  ```bash
-  echo '{}' | ~/Library/Application\ Support/Jarvis/bin/jarvis-keyhelper get
-  # {"error":"refused: caller is com.apple.zsh, not Jarvis","ok":false}
-  ```
-
-- **The first run moves the old keys in.** macOS asks for the keychain password one last time per saved
-  key ("jarvis-keyhelper wants to use…"). Choose *Always Allow*. A key you decline stays where it was and
-  keeps working the old way; *Keys → Import … Keys from the Old Keychain* tries again.
-
-| Menu → Keys | |
+| | |
 |---|---|
-| Status line | How many keys are unlocked, or "Locked". |
-| Unlock with Touch ID… | Ask again, for example after cancelling the prompt at startup. |
-| Require Touch ID to Unlock | On by default. Turning it off itself needs Touch ID. |
+| [Setup](docs/setup.md) | requirements, build, signing, permissions, API key, configuration |
+| [Features](docs/features.md) | wake word, speech, calendar and email, modes, camera, memory |
+| [Architecture](docs/architecture.md) | stages, state machine, tracing, latency, failure handling, supervisor |
+| [Remote access](docs/remote-access.md) | Tailscale, the API, the phone app, call mode, Siri |
+| [Privacy and security](docs/privacy-and-security.md) | what leaves the Mac, retention, tiers, Touch ID keys, Voice ID |
+| [Known limitations](docs/known-limitations.md) | |
+| [Changelog](CHANGELOG.md) | |
 
-If Jarvis is asked something while the keys are locked it says so ("My keys are locked. Unlock me with
-Touch ID, then ask again.") and brings the Touch ID prompt up.
+## Repository layout
 
-What this does and does not protect: the keys are released only to Jarvis, only after Touch ID, and are
-never written to disk outside the Keychain. They are in Jarvis's memory while it runs, as before. The
-helper's own Keychain approval is tied to its exact binary, so `install-keyhelper.sh --force` (a new
-helper build) brings the password prompts back once. Without the helper installed, Jarvis reads the
-Keychain directly as it used to, once per key per launch. Unit tests never touch the real Keychain.
-
-Why not the Keychain's built-in Touch ID protection? That needs an entitlement only an Apple Developer
-team signature can carry; with a self-signed certificate macOS answers `-34018`.
-
-## Safety model (enforced in code, Milestone 4)
-
-Every tool call goes through `ToolDispatcher` ([Actions/ToolDispatcher.swift](Sources/JarvisCore/Actions/ToolDispatcher.swift)), in this order:
-
-1. The tool must exist and not be **Tier 3** (refused outright, never offered to Claude).
-2. The tool declares what it will touch (paths, apps, shell text); the **denylist** checks all of it
-   before anything else happens — denied paths and their children, file patterns anywhere in a path,
-   app names, shell substrings, and any path mentioned inside a shell command.
-3. The current mode's `allowedTools` list.
-4. **Tier 2** needs approval: an approval card in the notch (Approve / Deny) plus "yes"/"no" by voice,
-   12 s timeout = denied. Only calls that come from a live user turn may ask; proactive features and
-   mode changes can never trigger Tier 2.
-5. Run, log, and surface a one-line summary for Tier 1+ ("Volume 40%").
-
-Every call is a JSON line in `~/Library/Logs/Jarvis/actions.log` (time, tool, tier, source, input,
-outcome, duration). *What Did You Do Today?* in the menu and the `actions_today` tool read it back.
-
-| Tier | Behaviour | Tools today |
-|------|-----------|-------------|
-| 0 automatic | read-only, runs on Anthropic's side | `web_search`, `web_fetch` |
-| 0 automatic | read-only | `system_status`, `file_search`, `file_read`, `get_location_context`, `actions_today`, `get_briefing`, `calendar_read`, `email_search`, `email_read`, `notion_search` |
-| 1 free | reversible, logged, undoable | `open_app`, `set_volume`, `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
-| 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
-| 0 automatic (cont.) | | `app_health`, `performance_report` |
-| 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
-| 1 free (people) | undoable | `contacts` (find, save, remove, list) |
-| 1 free (camera) | user requests only; asks first after outside content | `look`, `camera` (live feed, photo, video) |
-| 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches`, `calendar_cancel`, `email_send` |
-| 3 never | denylist.json + hard-coded floor | — |
-
-Prompt-injection defence: `file_read` (and the email / web / calendar tools in Milestone 5) wrap
-their output in `<untrusted_content source=…>` tags; the system prompt tells Claude such content is
-data, never instructions, and to tell you if it tried to be. Closing tags inside the content are neutralised.
-Approvals asked after such content was read say so (see the confirmation gate above).
-
-**Adding a tool** is one file in `Actions/Tools/`: conform to `JarvisTool` (name, description, tier, JSON
-schema, `targets(for:)`, `run`), then add it to the `register([...])` list in `AppDelegate`.
-The dispatcher handles denylist, approval, logging, and the undo stack.
-
-The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
-
-## Voice ID: checking it is you
-
-With Voice ID set up, Jarvis checks whose voice made each spoken request, and anything that needs approval
-is gated on the result.
-
-**Setup** (about a minute). Install the model once, then enroll:
-
-```bash
-scripts/setup-voiceid.sh        # 24.9 MB model, verified by checksum
 ```
-
-Then choose *Voice ID → Set Up Voice ID…* in the menu, or say "set up Voice ID". Jarvis shows five sentences;
-after each tone you read the one on screen. If a sentence is missed it asks again, and if the recordings do
-not sound like one voice nothing is saved.
-
-**Which model, and why.** Three were considered:
-
-| Option | For | Against |
-|--------|-----|---------|
-| **ECAPA-TDNN** (chosen) | The most accurate of the three (0.88% error on VoxCeleb1), free, and it runs in the ONNX Runtime Jarvis already ships for the wake word, so nothing new runs in the background | A 25 MB model file to download |
-| Picovoice Eagle | Easiest to integrate, small | Needs a Picovoice account and access key, and the free tier is metered |
-| Resemblyzer | Simple | Older and less accurate, and needs a Python process running next to Jarvis |
-
-The model is the WeSpeaker project's ECAPA-TDNN trained on VoxCeleb (CC-BY-4.0), published as ONNX. Features
-are computed in Swift ([VoiceID/Fbank.swift](Sources/JarvisCore/VoiceID/Fbank.swift)) and match a Python
-reference above 0.999. One check takes about 90 ms.
-
-**At run time.** The audio of each spoken request, "Hey Jarvis" included, is compared with your voiceprint.
-The result is a score from 0 to 1; `tuning.speakerThreshold` (0.5) or more counts as you.
-
-| The request was… | A spoken "yes" | The Approve button | A spoken "no" |
-|---|---|---|---|
-| Spoken, and verified as you | Counts | Counts | Counts |
-| Spoken, not verified (another voice, or too little speech) | Ignored | Counts | Counts |
-| Typed | Ignored | Counts | Counts |
-| Anything, with `tuning.unverifiedVoiceApproval` set to `never` | Refused outright | Refused | n/a |
-
-When the voice is not verified, Jarvis says so: "I couldn't verify your voice, so approve it on screen: …".
-This applies to everything that needs approval: sending email, cancelling events, shell commands, moving an
-event other people are invited to, and the camera after outside content. Replacing or deleting the voiceprint
-by voice needs an approval too, so someone else cannot take the gate over.
-
-**Local only.**
-- The voiceprint is 192 numbers in `~/Library/Application Support/Jarvis/voiceprint/voiceprint.json`,
-  readable only by your user (folder 0700, file 0600).
-- No audio is stored. Enrollment recordings and each request's audio are held in RAM and dropped after use.
-- Nothing is sent anywhere: the model runs on this Mac and the voiceprint is never in a request or a log.
-  Logs carry only the score.
-- The folder is on the hard-coded denylist, so no tool can read it, and it is in `.gitignore`.
-- *Voice ID → Forget My Voice* deletes it.
-
-**What it is not.** Voice ID tells voices apart; it does not prove a voice is live. A good recording or a
-clone of your voice could pass. Treat it as a second check on top of the approval, not as a lock. The scores
-from the synthetic test voices (same voice 0.68 to 0.92, another voice at most 0.39) are cleaner than a real
-room will be; after enrolling, watch *Voice ID → Last request* for a few days and adjust the threshold if
-you are being rejected or the margin looks thin.
-
-## Vision: looking on demand
-
-"Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.
-
-- **On demand only.** The `look` tool runs only inside a live request from you. A briefing, a timer, or a
-  mode change can never trigger it; the dispatcher refuses.
-- **One frame.** The camera opens, exposure settles for about half a second, one frame is taken, and the
-  camera closes. macOS shows its green indicator while it is on.
-- **Where the picture goes.** It is scaled to 1280 pixels, sent to Claude with your question, and kept in
-  RAM for the rest of that chat so you can ask a follow-up. It is never written to disk or to any log, and
-  only the newest picture stays in the conversation.
-- **Outside content.** If the request read an email or a web page before reaching for the camera, Jarvis
-  asks first and says why.
-- **Permission.** macOS asks for camera access the first time. Deny it and everything else keeps working.
-- **People.** Jarvis describes what it sees and does not identify real people from their faces.
-- **Private Mode** has no vision: the local model cannot see.
-
-### Live feed, photos, and video
-
-"Show me the camera" opens a small floating window with the live picture. "Record a video" and "take a
-photo" save to folders Jarvis creates: `~/Movies/Jarvis` and `~/Pictures/Jarvis`. The same things are in the
-menu under *Camera*.
-
-| Say | What happens |
-|-----|--------------|
-| "Show me the camera." / "Close the camera." | Opens or closes the live feed. The camera is on while the window is open. |
-| "Record a video." / "Record 20 seconds." | Starts recording, with sound. Opens the feed if it is closed. |
-| "Stop recording." | Saves the video and says where. |
-| "Take a photo." | Saves one still. |
-
-- **A recording is always visible.** It only runs while the feed window is open, and the window shows a red
-  `● REC` badge with a running clock. Closing the window stops the recording and turns the camera off.
-- **Every recording ends.** With no length given it stops at five minutes (`tuning.videoMaxSeconds`), and
-  Jarvis says so.
-- **Nothing is uploaded.** The feed and the files never leave the Mac. Only `look` sends anything, and that
-  is one frame.
-- **Same rules as `look`:** user requests only, and a yes is needed first if the request read outside content.
-- The feed is mirrored, like a mirror. Photos and videos are not.
-
-One camera session is shared by the feed, `look`, photos, and video
-([Vision/CameraSession.swift](Sources/JarvisCore/Vision/CameraSession.swift)). It turns off when the last of
-them is done.
-
-Frames come from a `FrameSource` ([Vision/FrameSource.swift](Sources/JarvisCore/Vision/FrameSource.swift)).
-`camera` is the Mac's camera. `glasses` is a `PushedFrameSource`: a bridge pushes its newest frame and
-`look` with `source: "glasses"` reads it, refusing anything older than ten seconds. Nothing feeds it yet;
-that is the hook for the remote-access phase.
-
-## Memory: what Jarvis remembers, and for how long
-
-| Layer | Holds | Lives in | Lasts |
-|-------|-------|----------|-------|
-| This chat | Everything said since the card appeared | RAM | Until the card closes, or 10 idle minutes |
-| This sitting | A short recap of the last 6 exchanges from chats that already closed | RAM | 30 minutes, gone when Jarvis quits |
-| Preferences and facts | "prefers Celsius", "CSC 210 lab is in Gould-Simpson 701" | `USER.md`, `MEMORY.md` | Until you change them |
-| Contacts | Name, email, phone, how you refer to them | `contacts.json` | Until you remove them |
-| Archive | Every past exchange, searchable | `memory.db`, `conversations.log` | See the retention policy |
-
-Everything is in `~/Library/Application Support/Jarvis/` and `~/Library/Logs/Jarvis/` on this Mac. Nothing is synced.
-
-- **Session recap.** The card shows one chat at a time and each chat starts clean. So that "move it to four
-  instead" still works a minute later, the next chat is given a few lines about the previous ones. The recap
-  is clipped, has secrets redacted, is marked as context and not instructions, and is never written to disk
-  (`tuning.sessionMemoryMinutes`, 0 turns it off).
-- **Contacts.** "Maya is my lab partner, her email is maya@example.com" saves her. "Email my lab partner"
-  then finds her. If nobody is saved under a name, Jarvis looks in macOS Contacts, which asks for your
-  permission the first time; only the matching name, email, and phone are read. If nobody is found,
-  Jarvis asks you. It never invents an address.
-- **Nothing that looks like a credential** is stored in any layer.
-
-## Multi-step requests and the confirmation gate
-
-"Check Friday, draft a note to Maya about it, and send it" is one request with three steps. Jarvis says
-the plan in a sentence, runs the steps in order, and stops for your yes before the one that cannot be undone.
-
-- **What needs a yes** (Tier 2): sending an email, cancelling an event, running a shell command, restarting
-  an app, clearing caches. Jarvis says exactly what it is about to do and listens for "yes" or "no" after it
-  has finished speaking; the card also has Approve and Deny. No answer in 12 seconds means no.
-- **The approval reads back the real thing.** For an email that is the recipient, subject, and opening line
-  as Gmail holds them. For an event it is the title, date, and time of the event that will be deleted.
-- **Outside content is called out.** If the request read an email, a web page, a file, or the calendar
-  before asking, the approval ends with "Note: I read an email before asking this". That is where a
-  prompt injection would have to get through, so that is where you are told.
-- **Sending is narrow.** `email_send` only sends a draft that `email_draft` created since Jarvis started.
-  A draft that was already in Gmail, or an ID that turned up inside an email, is refused before you are
-  even asked. To turn sending off, remove `email_send` from the mode's `allowedTools` in `modes.json`.
-- **If you say no, or a step fails,** the chain stops there and Jarvis says what was done and what was not.
-  A refused email stays in Drafts.
-- **Limits:** ten model rounds and sixteen tool calls per request (`tuning.llmMaxToolRounds`,
-  `tuning.toolCallBudgetPerTurn`), and the 120-second request deadline.
-- **Nothing irreversible is ever started by a briefing, a timer, or a mode change.** Only a live request from
-  you can reach an approval.
-
-## Calendar: list, create, move, cancel
-
-Jarvis works on every account in macOS Calendar (iCloud, Google, Exchange) through EventKit.
-
-| Say | Tool | Safety |
-|-----|------|--------|
-| "What's on tomorrow?" | `calendar_read` | Read-only. Marks events that repeat, have other people invited, or are read-only. |
-| "Add office hours Friday at 2." | `calendar_create` | Undoable ("undo that" deletes it). |
-| "Move calculus tomorrow to 3." | `calendar_move` | Undoable (moves it back). Keeps the event's length. |
-| "Cancel my dentist appointment." | `calendar_cancel` | Always asks first. Undo puts back a copy. |
-
-- **Finding the event.** You name it by a few words and the day. If nothing matches, or two events do, Jarvis
-  asks which one instead of guessing.
-- **Other people.** Moving or cancelling an event with invitees can notify them, which is a message sent on
-  your behalf. Jarvis asks first, and a proactive feature can never do it.
-- **Cancelling.** The approval names the event that will really be deleted, with its date and time, not just
-  the words you used.
-- **Repeating events.** Only the occurrence you named changes. The rest of the series is untouched.
-- **Read-only calendars** (holidays, a subscribed class schedule) are never changed.
-
-## Echo: keeping Jarvis from hearing itself
-
-On built-in speakers the microphone hears everything Jarvis says. Four things keep that from turning into
-Jarvis answering its own voice:
-
-1. **Speaking means speaking.** A sentence that is still being synthesized counts as speech, so the
-   follow-up listen cannot start while audio is on its way.
-2. **A quiet gap.** After the last word, Jarvis waits `tuning.followUpGuardMilliseconds` (350 ms) before
-   it listens for a follow-up.
-3. **Echo guard.** A follow-up that is a long, in-order copy of the reply Jarvis just gave is dropped and
-   logged as `echo_discarded`. The match is fuzzy, because the recognizer garbles its own voice.
-   Short answers that reuse Jarvis's words ("yes, start something on Spotify") are not affected.
-4. **Talking over Jarvis only interrupts on headphones** (`tuning.speechBargeIn`: `headphones`, `always`,
-   or `never`). On speakers, say "stop", say "Hey Jarvis", or click the card.
-
-Approvals are stricter still: Jarvis starts listening for "yes" or "no" only after its own prompt has
-finished playing, and ignores anything heard while it is speaking.
-
-## Staying up: the launchd supervisor
-
-On 2026-11-22 a crash left Jarvis dead for four hours before anyone noticed. A launchd agent now starts
-Jarvis at login and restarts it after a crash.
-
-```bash
-scripts/install-agent.sh            # install and start under launchd
-scripts/install-agent.sh --status   # installed? loaded?
-scripts/uninstall-agent.sh          # remove it
+Sources/
+  Jarvis/                 entry point
+  JarvisCore/
+    Pipeline/             stage interfaces, state machine, ConversationController
+    Wake/  STT/  Intent/  Actions/  TTS/        the five stages, one folder each
+    VoiceID/  Vision/  Memory/  Skills/  Music/  what the stages draw on
+    Integrations/  Context/  Proactive/          calendar, mail, notes; modes; scheduled nudges
+    Remote/  Resources/WebApp/                   the remote API and the phone app it serves
+    Privacy/  Config/  Logging/  Net/            data map and retention, settings, tracing, HTTP
+    App/  NotchUI/                               wiring, menu bar, the notch and HUD
+  JarvisKeyHelper/        Touch ID key helper (built once, never rebuilt)
+  JarvisObjC/             Objective-C exception shim
+Tests/JarvisCoreTests/    362 tests; scripts/test.sh groups them by stage
+config/                   default profile, modes, allowed folders, denylist
+scripts/                  build, run, test, setup and check scripts
+voice/                    the Kokoro speech server (Python)
+docs/                     the documentation above
+.env.example              every setting that can be overridden, documented
 ```
-
-The agent is `~/Library/LaunchAgents/com.samarth.jarvis.plist`. The menu item *Keep Running* writes or
-removes the same file.
-
-- **A crash or `kill -9`** restarts Jarvis within a second or so (never more often than every 10 s). On the
-  way back up it says "I had to restart a moment ago. I'm back."
-- **Quit from the menu, or a plain `kill`,** is a clean exit and stays quit.
-- **A crash loop** is stopped from inside: more than five starts in two minutes and Jarvis exits cleanly,
-  so launchd leaves it alone. The reason is in `jarvis.log` and `launchd.err.log`.
-- **A frozen app** is caught too. A crash is not the only way to die: a background timer pings the main
-  thread, and if it has not answered for 30 seconds (`tuning.hangTimeoutSeconds`) Jarvis logs it and exits,
-  so launchd starts a fresh copy. The clock it uses stands still while the Mac sleeps.
-- **Only one copy runs.** A second copy (the login item and the agent both firing) exits at once.
-- `scripts/run.sh` notices the agent and restarts through launchd instead of opening a second copy.
-
-To verify: `kill -9 $(pgrep -x Jarvis)`, then `pgrep -x Jarvis` shows a new process ID.
-
-## Spending: daily cap and rate limits
-
-Every paid call goes through one guard ([Net/Budget.swift](Sources/JarvisCore/Net/Budget.swift)): Claude
-replies, cache warm-ups, briefings, web searches, and the paid voices (ElevenLabs, OpenAI). The Kokoro and
-Apple voices are free and are not counted.
-
-| Setting (`profile.json → tuning`) | Default | Meaning |
-|---|---|---|
-| `dailyBudgetUSD` | 3 | Paid requests stop for the day at this amount. 0 = no cap. |
-| `budgetWarnFraction` | 0.8 | Jarvis says "Heads up: I've used 80 percent of today's 3 dollar budget." once. |
-| `modelRequestsPerMinute` | 30 | More than this in a minute is treated as a runaway loop and refused. |
-| `speechRequestsPerMinute` | 90 | The same, for paid voices. |
-
-- **Before** each call the guard checks the cap and the rate. Over the cap, the request never leaves the Mac.
-- **After** each call it records the real cost from the API's own token counts, including cached tokens
-  and web searches. A reply that is cut off is still recorded.
-- **At the cap** Jarvis says so once, then answers from the local Ollama model if one is installed, and
-  otherwise tells you the budget is used up. Paid voices fall back to the Apple voice.
-- **The day** is your local calendar day. Spend is kept in
-  `~/Library/Application Support/Jarvis/spend.json` and survives restarts. The menu shows
-  `Spend: $0.42 of $3.00 today`.
-
-Prices are in `profile.json → pricing` because they change: Anthropic list prices per million tokens as of
-2026-11-03, one cent per web search, and estimates for the paid voices that you should replace with your
-plan's rate. An unknown model is priced like the most expensive one, so the cap can only arrive early.
-For scale: a typical warm Sonnet 5.5 turn costs about $0.002, and a cold one about $0.03.
-
-## Latency
-
-Time from the end of your sentence to Jarvis's voice has three parts. Each was measured, then fixed
-(Phase 2, 2026-11-22). Settings are in `profile.json → tuning`.
-
-| Part | Before | After | How |
-|------|--------|-------|-----|
-| Silence wait that ends your turn | 1.3 s, always | 0.9 s when what you said already ends in `.` `?` `!` (74% of 181 logged utterances), otherwise 1.3 s | `endpointFastSilenceSeconds` |
-| Claude's first word | median 1.6 s with a warm prompt cache, 1.8 s cold; 90th percentile 2.3 s warm, 4.9 s cold. 29% of 150 turns were cold | The cache is warmed while you are still speaking, so the turn reads it instead of writing it. Two warm turns measured after the change: 0.76 s and 0.83 s | `cachePrewarmAfterSeconds` |
-| Synthesis of the first spoken chunk (Kokoro, 89 logged replies) | median 1.34 s, 90th percentile 3.65 s, worst 23.6 s | median 1.07 s, 90th percentile 1.61 s, worst 4.66 s | `ttsFirstChunkMinWords`, and a fixed sentence splitter |
-
-What changed:
-
-- **Opening clause first.** Speech starts on "Good morning, Sam," instead of waiting for the whole first
-  sentence. Synthesis time grows with the length of the chunk.
-- **Sentence splitter bug.** A sentence ending in a two-letter word ("…act on.", "…want it.") was taken for
-  an abbreviation, and nothing after it was split. Such a reply was spoken as one clip after the model
-  finished; that is the 23.6 s case.
-- **Cache pre-warm.** At the first transcribed word, if the last request was more than four minutes ago,
-  Jarvis sends a `max_tokens: 0` request with the same tools and system prompt. It costs one cache read
-  (about $0.001) when the cache was still warm, and nothing extra when it was cold, because the turn
-  would have paid for that write anyway. False wakes never trigger it.
-- **Token counts were doubled.** Usage is reported at the start and again at the end of a message; both
-  were added. Fixed before the cost cap was built on top of it.
-
-The slowest remaining part is Kokoro itself, at about three times real time on this Mac: roughly 1.1 to
-2.6 s for the first chunk inside a live turn. Thread count makes no difference and the CoreML provider
-crashes; a different model file is the next lever.
-
-To re-measure:
-
-```bash
-scripts/latency-report.py --last 50          # per stage, from real requests
-scripts/tts-bench.py chunks.json             # voice engine alone; see the script header
-```
-
-## When something fails
-
-The rule: every failure produces one short spoken sentence (or an on-screen one when voice is off), and
-the pipeline returns to `idle`. Nothing fails silently and nothing hangs.
-
-| Failure | What happens |
-|---------|--------------|
-| Claude error, rate limit, bad key, no network | Spoken in plain words ("I'm offline right now."). No status codes. |
-| The model or a tool never answers | The request stops at `tuning.turnTimeoutSeconds` (120 s): "That took too long, so I stopped. Try again." |
-| One tool hangs | Stopped at `tuning.toolTimeoutSeconds` (45 s). Claude is told it timed out and says so. Logged as `timeout`. |
-| Speech recognition fails or is not permitted | Spoken once, then shown only for `tuning.repeatErrorAfterSeconds`. |
-| The microphone delivers no audio | After three silent rebuilds: "I'm not getting any sound from the microphone." Announced again when it returns. |
-| The audio device changes or disappears | Restarts are coalesced and backed off; the audio framework's exceptions are caught instead of crashing. |
-| A cloud or Kokoro voice fails | The sentence is spoken by the Apple voice instead. |
-| A transition the state table does not allow | Logged and counted (`Illegal transition`). |
-
-### Network: timeouts and retries
-
-Every outgoing request goes through [Net/HTTP.swift](Sources/JarvisCore/Net/HTTP.swift).
-
-- **Timeout:** 15 s for Gmail, Notion, Spotify, and Google sign-in (`tuning.httpTimeoutSeconds`). Weather keeps
-  its own 8 s. Claude has a 60 s idle timeout between stream packets.
-- **Retries:** up to two more attempts (`tuning.httpMaxRetries`) on 408, 429, 5xx, 529, and dropped
-  connections. Waits start at 0.5 s, double each time with 25% jitter, and never exceed 8 s. A `Retry-After`
-  header from the server is obeyed up to that 8 s cap, and `x-should-retry: false` stops retrying.
-- **Nothing is created twice.** A request that creates something (a Gmail draft, a Notion page) is retried only
-  when it provably did not go through: 429, 503, 529, or a connection that never opened. A 500 or a timeout
-  on such a request is reported, not repeated.
-- **Claude** is retried only before the first byte of a reply. Once Jarvis has started speaking an answer,
-  starting over would say it twice.
-- **Offline** fails at once, so Jarvis says "I'm offline right now" instead of waiting.
-
-Each retry is a `Retry N for …` line in `jarvis.log` and a `retry` event in the trace.
-
-The messages live in [Pipeline/Failures.swift](Sources/JarvisCore/Pipeline/Failures.swift). The tests force
-each failure with fakes and check that Jarvis speaks and recovers.
-
-## Logs and tracing
-
-Everything lives in `~/Library/Logs/Jarvis/` (menu → *Open Logs*):
-
-| File | What it holds |
-|------|---------------|
-| `jarvis.log` | Human-readable events. Lines that belong to a request carry its ID, like `[r-3fa9c1]`. |
-| `trace.jsonl` | Structured. One JSON object per pipeline stage, and one summary per request with per-stage latency. Never contains what was said, only sizes and timings. |
-| `actions.log` | Every tool call as a JSON line: time, tool, tier, source, input, outcome, duration. |
-| `conversations.log` | What you said and what Jarvis answered, secrets redacted. |
-
-Every request gets an ID and moves through five stages: **heard → transcribed → intent → action → spoken**.
-To follow one request end to end:
-
-```bash
-grep r-3fa9c1 ~/Library/Logs/Jarvis/jarvis.log ~/Library/Logs/Jarvis/trace.jsonl
-```
-
-For latency per stage across recent requests (median, 90th percentile, worst), and the slowest tool:
-
-```bash
-scripts/latency-report.py --last 50
-```
-
-Log files rotate at 5 MB and keep three old copies (`tuning.logMaxMegabytes`, `tuning.logKeepFiles`).
-Unit tests write to a temporary folder, never to these files.
-
-## Known limitations
-
-- Gmail and Notion were built against the API docs but not exercised live (no tokens on this Mac during development). Parsers are unit-tested; errors are spoken and logged.
-- Brightness uses a private framework and works on the built-in display only. Focus needs the Shortcuts above.
-- Call detection is heuristic (camera in use or a call app running). A browser-only Meet call with the camera off is not detected.
-- Idle CPU with the wake word is 3–4 % in `top`, just above the 3 % target; the embedding model is the floor.
-- Ad-hoc signing re-prompts for permissions after every rebuild; `scripts/make-dev-cert.sh` fixes that. Saved keys are unlocked with Touch ID through `jarvis-keyhelper` and no longer depend on the signature.
-- I could not make a live Claude call during development because no API key was on this machine. The request shape is unit-tested and follows the current API docs; the first real turn is yours. If something 400s, the error text is spoken and logged.
-- `media_control` posts system media-key events; on some macOS versions this needs Accessibility. If play/pause does nothing, that's why.
-- Wake → first transcribed word measured 1.3 s with SpeechAnalyzer (includes the natural pause after "Hey Jarvis"). Partial results arrive faster once you're mid-sentence.
-- Launching the raw binary from a terminal makes macOS attribute permission requests to the terminal (it even crashes on the speech prompt). Always launch `Jarvis.app` via `open` / `scripts/run.sh`.
-- The wake model is English-trained TTS/real-speech data; a quiet room and the built-in mic work best. Lower `threshold` in `WakeWordService` if it misses you, raise it if it false-triggers.
-- Idle CPU lands at 3–4% in `top`, just above the 3% target. Every lever tested (batching, QoS, Core ML provider) measured the same, so the next step would be a smaller embedding model.
-- Jarvis listens on whatever macOS picks as the default input. With AirPods on, that is the AirPods mic.
-- Mode switching is manual; automatic detection and per-mode setup land in Milestone 6.
-- Focus modes and display brightness have no public API. Focus will be toggled through a
-  Shortcut you create once; brightness through a private display call with graceful fallback.
-- Ad-hoc signing resets permission grants on each build (see *Code signing*).
-
-## Changelog
-
-### 0.14.1 — Call mode (2026-11-23)
-- **Phone app:** *Call* opens a hands-free, turn-after-turn conversation over the tailnet. Ends on Hang up,
-  "bye", leaving the app, or 90 seconds of silence.
-
-### 0.14.0 — Upgrade phase 6: privacy and retention (2026-11-23)
-- **Local-first, visible:** a *Privacy* menu and a startup log line say what leaves this Mac. No audio does;
-  the one recognizer that could use Apple's servers is refused unless `cloudSpeechRecognition` is `allow`.
-- **Retention:** conversations and timings 30 days, diagnostics 14, the tool log 90, recordings kept (or
-  moved to the Trash after a limit you set). Swept at start and daily.
-- **Fix:** the pairing-code dialog froze the main queue and the hang watchdog restarted Jarvis after 30 s.
-
-### 0.13.0 — Upgrade phase 5: remote access (2026-11-23)
-- **Tailscale:** setup walkthrough and `scripts/tailscale-check.sh`.
-- **Remote API:** `/v1/status`, `/v1/ask`, `/v1/approve`, inside the app, bound to the Tailscale address
-  only, with a per-device token on every request. Off by default. A remote request runs the same stages as
-  a spoken one and returns text and audio; nothing is shown or said on the Mac.
-- **Remote approvals need a verified voice.** No Voice ID, a typed request, or someone else's voice: refused.
-- **Phone app:** one mic button, served by Jarvis, installable from the browser. Pairs with a six-digit code
-  shown on the Mac. The microphone needs HTTPS, which `tailscale serve` provides (see the README step).
-- A copy of Jarvis opened by hand now hands over to the launchd supervisor.
-
-### 0.12.1 — Touch ID for the saved keys (2026-11-23)
-- **No more keychain password prompts.** A small, never-rebuilt helper (`jarvis-keyhelper`) holds the saved
-  keys and releases them to Jarvis after Touch ID, once per launch. Before, every rebuild made macOS ask for
-  the keychain password again, per key, sometimes mid-conversation under the HUD where it could not be typed.
-- The helper refuses any caller that is not Jarvis. Existing keys move over on the first run.
-- New *Keys* menu; a locked vault is spoken as such instead of "no API key".
-- Unit tests no longer read the real Keychain.
-
-### 0.12.0 — Camera, and upgrade phase 4: Voice ID (2026-11-23)
-- **Camera:** live feed window, video and photo capture to `~/Movies/Jarvis` and `~/Pictures/Jarvis`. A
-  recording is only possible while the feed is visible.
-- **Voice ID:** ECAPA-TDNN speaker verification on-device; guided five-sentence enrollment; approvals are
-  gated on the request being in your voice, with the Approve button as the fallback.
-- **Stability:** fixed a deadlock when the camera closed; a watchdog now restarts Jarvis if its main thread
-  freezes for 30 seconds.
-- 285 tests.
-
-### 0.11.0 — Upgrade phase 3: features (2026-11-22)
-- **Calendar:** `calendar_move` (undoable) and `calendar_cancel` (always approved). Events are found by
-  title and day; changes that would notify invitees ask first.
-- **Chains:** multi-step requests with a spoken yes before anything irreversible. `email_send` sends a
-  draft Jarvis created, after an approval that reads back the real recipient and subject. Approvals say
-  when outside content was read first.
-- **Memory:** a short RAM-only recap across chats, and a contact book with a macOS Contacts fallback.
-- **Vision:** `look` takes one camera frame on request; a `glasses` frame source is ready for a bridge.
-- 238 tests.
-
-### 0.10.0 — Upgrade phases 1 and 2: architecture and reliability (2026-11-22)
-- **Architecture:** five stages behind interfaces (wake, speech-to-text, intent, actions, speech-out), one
-  state-transition table, a request ID traced through every stage, all thresholds in `tuning` with
-  `JARVIS_*` overrides, and a spoken message for every failure.
-- **Echo:** Jarvis no longer answers its own voice (19 of 89 logged exchanges were echoes).
-- **Reliability:** audio-device crash fixed; launchd supervisor restarts after a crash; retries with backoff
-  on every network call; tool and request deadlines; daily cost cap with a spoken warning.
-- **Latency:** opening clause spoken first, prompt cache warmed while you speak, shorter silence wait after
-  a complete sentence. First-chunk synthesis p90 3.65 s → 1.61 s.
-- **Bugs found by the new tracing and tests:** overlapping Kokoro sentences, replies stalled by a sentence
-  ending in a two-letter word, error messages spoken twice, token usage counted twice. 198 tests.
-
-### 0.9.3 — Web search, stable signing (2026-11-07)
-- Jarvis can search the web and read pages freely, using Anthropic's server-side `web_search` and `web_fetch`. Server blocks are kept verbatim in the history, `pause_turn` resumes automatically, an interrupted search is repaired out of the history, and every search is logged. A web answer takes about 3 s.
-- Fixed a crash when listening started while Jarvis was speaking: audio that arrived before Apple's SpeechAnalyzer reported its format went in unconverted.
-- Text dialogs (API key, Spotify, and Google client) now take keyboard focus. Recent macOS ignored the old activation call for menu-bar apps.
-- `scripts/make-dev-cert.sh` works with OpenSSL 3, and `build-app.sh` signs with "Jarvis Dev" automatically, so the Keychain stops asking after every rebuild.
-- The chat log records typed questions correctly. 111 tests.
-
-### 0.9.2 — Email fixes, one chat at a time (2026-11-06)
-- Fixed "API error 400" after interrupting Jarvis mid-request: each turn now commits its history atomically, any malformed history is repaired before sending (every tool_use gets a tool_result, same-role messages merged), and a 400 retries once with a clean history.
-- Gmail search fetches messages in parallel: 9.4 s → 0.5 s for an inbox search.
-- One chat at a time: when the card disappears, the conversation ends and the next one starts fresh. The HUD no longer lists earlier exchanges. Every exchange is kept in `~/Library/Logs/Jarvis/conversations.log` (menu → Memory → Open Chat Log) and stays searchable through memory.
-- Fixed Gmail sign-in: the OAuth redirect used port 0. 103 tests.
-
-### 0.9.1 — Free neural voice (2026-11-06)
-- Kokoro-82M on-device voice (free, offline, no key): `scripts/setup-kokoro.sh`, `voice/kokoro_server.py`, app-managed server with auto-restart. Auto engine order: ElevenLabs key → OpenAI key → Kokoro → Apple. British voices in the menu. 98 tests.
-
-### 0.9.0 — Card, music, voice (2026-11-06)
-- Floating card on the active screen replaces the menu-bar notch overlay; halo off; HUD no longer on every turn.
-- `music` tool: Spotify / Apple Music via AppleScript, play by name via Spotify search (client credentials). Replaces media keys, which macOS ignored.
-- Neural voices: ElevenLabs and OpenAI TTS with per-sentence streaming and Apple fallback; voice picker ranks Siri neural / Premium voices first when visible.
-- Verified live: "What's Spotify playing?" and "Play the music" worked; card shown on the screen under the mouse. 95 tests.
-
-### 0.8.1 — Mic fix (2026-11-06)
-- Fixed: after the input switched between AirPods and the built-in mic, the audio tap could go silent, so "Hey Jarvis" was never heard while typed commands still worked. Capture now builds a fresh `AVAudioEngine` on every restart, and a watchdog rebuilds it if no audio arrives for 6 seconds.
-- Fixed: the hidden HUD kept animating at 30 fps (~13 % CPU). Its view tree is now torn down when dismissed.
-
-### 0.8.0 — OpenJarvis port (2026-11-06)
-- Persistent memory (MEMORY.md, USER.md, FTS5 conversation index) with `memory` and `memory_search` tools; injected into every turn.
-- LoopGuard, secret redaction of all tool output, prompt-injection labelling of untrusted content.
-- Claude-narrated briefings in JARVIS's voice with weather and headlines; `weather`, `news_headlines` tools.
-- Ollama local engine for offline use and Private Mode.
-- SKILL.md skills with `use_skill`; ships `exam-prep`.
-- Fix: typed or menu questions were ignored while Jarvis was listening for a follow-up.
-- Verified live: narrated briefing, "remember my lab partner is Maya" → USER.md → recalled next turn. 89 tests.
-
-### 0.7.1 — Conversation flow + G5 (2026-11-05)
-- HUD on a preferred display (`hud.preferredDisplay`, default "Odyssey G5"), fallback to the notch screen.
-- Conversation mode: follow-up listening after every reply (no wake word), end words, quiet timeout.
-- Interrupt by talking over Jarvis, with an echo filter against its own speech; "stop" unchanged.
-- HUD exchange log; menu toggles for Conversation Mode and the HUD display line. 76 tests.
-
-### 0.7.0 — Iron Man mode (2026-11-05)
-- JARVIS persona in the system prompt, British voice preference.
-- `PhraseSpotter`: extra wake phrases via on-device speech recognition, active only during an arrival window (home Wi-Fi after being away, or wake from sleep at home). "Hey Jarvis" during the window also triggers the homecoming.
-- `SceneDirector` with the homecoming scene; `welcome_home` and `set_display_mode` tools.
-- Full-screen HUD (`HUDView`, `HUDWindowController`): arc reactor, readouts, transcript/reply, Esc/click to dismiss, optional always-on.
-- Fixes: launching at home no longer counts as an arrival; a debounced homecoming lets "Hey Jarvis" fall through to a normal turn.
-- 72 tests.
-
-### 0.6.0 — Milestone 6 (2026-11-05)
-- Context detection (Core Location, CoreWLAN SSID, power, displays, current calendar event) + pure `ModeScorer`; automatic mode switching with a manual-override window; `remember_place` writes `modes.json`.
-- Mode setup applied through the dispatcher as source `mode` (volume, brightness, quit/hide/open apps, Focus via Shortcuts) with snapshot + restore / undo. New tools: `set_brightness`, `set_focus`.
-- Proactive scheduler: morning briefing (time or first unlock), exam/deadline nudges at 7/3/1/0 days, Road low-battery warning, optional break reminders; gated by DND, quiet hours, call/screen-share detection, Class mode.
-- Maintenance: `organize_folder` (undoable, moves.json), `app_health`, `restart_app` (Tier 2), `performance_report`, `clear_caches` (Tier 2, to Trash).
-- Menu: Automatic mode toggle with the last auto reason, Break Reminders, quiet-hours status, Ask by Text…, pastable key dialogs (Edit menu, Paste button), `scripts/set-api-key.sh`, `scripts/make-dev-cert.sh`.
-- Fixed: SSE parsing dropped every event (the byte-line iterator swallows blank separators), so Claude replies were empty; empty assistant content could then poison the history with a 400. Both fixed, with a parser test.
-- Prompt caching (stable tools + personality prefix, volatile mode/clock block). Measured on Sonnet 5.5: 9,938 cached tokens read per turn, ~700 fresh; first token 1.0 s on a cached turn.
-- Verified live end to end with the real API key: "What's my battery at?" → `system_status` → spoken answer.
-- 68 tests. Measured: idle CPU 2.1 % with everything running (wake word, context polling, scheduler), 41 MB.
-
-### 0.5.0 — Milestone 5 (2026-11-05)
-- EventKit `CalendarService`: events, incomplete reminders, create event / reminder (undoable), natural date parsing.
-- Google OAuth (PKCE + loopback) with Keychain-stored client and refresh token; `GmailClient` search / read / draft (no send). HTML-to-text for bodies.
-- `NotionClient` (API 2025-09-03): data-source queries with filters/sorts, search, create page, relation title cache. `profile.json` pre-wired to the Student OS Homework / Exams / Classes data sources.
-- `BriefingService` + `get_briefing`: merges calendar, reminders, Notion, email; cleans and dedupes titles; spoken one-liner; next-class line in Class mode. Verified live against the real calendar.
-- Menu: Integrations submenu (Google client, Connect Gmail, Connect Notion), Briefing Now. `kill -USR2` runs the real briefing.
-- Config merging: new default keys are added to the user's profile.json copy on launch.
-- 55 tests (Notion/Gmail parsing, date parsing, briefing logic, title cleaning).
-
-### 0.4.0 — Milestone 4 (2026-11-05)
-- Claude brain: streaming `/v1/messages` client, agent loop with parallel tool results, 10-minute conversation memory, refusal handling, friendly API/network errors, offline fallback matcher.
-- Permission system enforced in code: tiers, `JarvisTool` protocol, denylist guard (paths, patterns, apps, shell), dispatcher with approval gate (user-sourced only), JSONL action log, undo stack.
-- Approval card in the notch with Approve/Deny buttons and voice yes/no; sentence-by-sentence streaming TTS.
-- 12 tools: system_status, open_app, set_volume, media_control, set_timer, file_search, file_read, run_shell, get_location_context, set_mode, undo_last_action, actions_today.
-- Menu: Set API Key… (Keychain), Clear Conversation, What Did You Do Today?, per-turn tool/token stats.
-- `kill -INFO $(pgrep -x Jarvis)` pushes a demo `run_shell` request through the real approval path.
-- 46 tests, including 17 for the dispatcher/denylist and live checks of the read-only tools and the sandboxed shell.
-
-### 0.3.0 — Milestone 3 (2026-11-05)
-- `Transcriber` protocol with two implementations: SpeechAnalyzer (macOS 26, on-device, no Dictation dependency) and SFSpeechRecognizer (macOS 14–15 fallback). Live transcript shown in the notch.
-- `Endpointer` (silence / no-speech / max-duration / final-result) with unit tests.
-- `SpeechOutput` protocol + `AppleSpeechOutput`: best-quality voice selection (skips novelty voices), per-mode volume, profile speech rate. Voice submenu to pick and test voices.
-- `ConversationController`: wake → listen → think → speak state machine, barge-in by "Hey Jarvis" or "stop", text-only replies when the mode disables voice, latency logging. `kill -USR1` now runs the real flow.
-- Config: optional `profile.json → speech` section (older config copies still parse).
-- Measured live (built-in mic, SpeechAnalyzer): wake score 0.99 → first word 1299 ms; end of speech → reply 346 ms. 23 tests pass.
-
-### 0.2.0 — Milestone 2 (2026-11-05)
-- On-device wake word: openWakeWord "hey jarvis" on ONNX Runtime, batched inference, 2 s cooldown.
-- `AudioCapture`: AVAudioEngine tap → 16 kHz mono, restarts on device change and wake from sleep.
-- Siri-style iridescent glow around the notch and the screen edge while listening; dimmer while thinking. Respects Reduce Motion.
-- Menu: wake word status/stats, pause, test trigger, Microphone privacy shortcut when denied.
-- Tests: silence never triggers; synthesized "hey jarvis" (macOS `say`) scores ≥ 0.5; unrelated phrase stays < 0.5; checks at batch sizes 1/2/4. A benchmark test prints per-model timings.
-- Measured on M4 Pro (built-in mic): idle CPU 3.1–4.4% in `top` with the wake word running (0.2–0.4% with the mic open but inference paused; the embedding model is the floor at ~1 ms of P-core time per 80 ms chunk, which shows as ~3% because it runs on efficiency cores at low clock). Memory ~40 MB. Synthesized "hey jarvis" through the speakers at 13% volume scored 0.73 and 0.99; unrelated speech < 0.01. Wake → notch visible in under 1 ms after detection.
-
-### 0.1.0 — Milestone 1 (2026-11-05)
-- Swift Package with `JarvisCore` library + thin `Jarvis` executable; `scripts/build-app.sh` produces a signed `Jarvis.app`.
-- Menu bar app with no Dock icon (`LSUIElement`), status, mode switcher, Do Not Disturb, demos, config and log shortcuts, Launch at Login.
-- Notch overlay: non-activating panel above the menu bar on all Spaces and over full-screen apps; notch geometry from `NSScreen` safe areas with floating-pill fallback; spring expand/collapse; listening glow + waveform; thinking dots; response text; briefing card; Reduce Motion support; re-measure on display change and wake.
-- Config: `profile.json`, `allowed-folders.json`, `denylist.json`, `modes.json` with seeding to Application Support, strict parsing with visible errors and safe fallbacks, denylist floor always merged.
-- Logging to `~/Library/Logs/Jarvis/jarvis.log` and Console.
-- Tests: config parsing, denylist floor, fallback behaviour, notch geometry/shape, view-model phase flow (9 tests).
-- Measured: idle CPU 0.0%, resident memory ~70 MB, notch detected 185×32 pt on this MacBook Pro.
