@@ -6,7 +6,11 @@ native macOS menu bar app written in Swift, with the wake word, speech recogniti
 verification running on-device, Claude doing the thinking, and every action passing a permission system
 enforced in code.
 
-<!-- demo -->
+<p align="center">
+  <img src="docs/demo.gif" width="300" alt="The Jarvis phone app: pairing with a six-digit code, then asking a question and getting the answer">
+</p>
+
+<p align="center"><sub>The phone app talking to Jarvis on the Mac over a private Tailscale network: pair with a code, ask, get the answer.</sub></p>
 
 ## What it does
 
