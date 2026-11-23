@@ -313,6 +313,21 @@ Paid alternatives, also in the menu → Voice:
 Replies are spoken sentence by sentence while the rest streams; if the cloud voice fails or you're
 offline, that reply finishes on the Apple voice. Cloud voices send the reply text to that provider.
 
+## Google in the browser
+
+"Hey Jarvis, google cheap flights to Seattle" opens your default browser on the Google results page, with
+the search already typed in. "Google images of red pandas", "google news about…", "find ramen on Google
+Maps" work the same way (`google_search`, kinds `web`, `images`, `news`, `videos`, `maps`).
+
+- **It opens one page and stops.** It does not click results, fill in forms, or sign in to anything.
+- **Asking a question is different.** "What's the cheapest flight to Seattle?" still gets a spoken answer
+  from Claude's own web search, with no browser.
+- **Only when you ask.** A briefing, a timer, or a mode change can never open a search.
+- **Outside content.** If the request read an email, a web page, or a file first, Jarvis reads the exact
+  search back and waits for your yes, because a search is a way to send words to Google.
+- **Never a key or a password.** A search that looks like one is refused.
+- The address is always `https://www.google.com/…`; the words you said can only ever be the search.
+
 ## Vision: looking on demand
 
 "Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.

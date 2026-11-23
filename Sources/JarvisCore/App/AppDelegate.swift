@@ -229,7 +229,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         camera.onNotice = { [weak self] text in self?.conversation?.announceWhenIdle(text) }
         frames = FrameSources([CameraFrameSource(session: camera.session), glasses], default: "camera")
         dispatcher.register([
-            SystemStatusTool(), OpenAppTool(), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
+            SystemStatusTool(), OpenAppTool(), GoogleSearchTool(), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
             UndoLastActionTool(), ActionsTodayTool(log: actionLog),
             GetBriefingTool(service: briefing), CalendarReadTool(calendar: calendar), CalendarCreateTool(calendar: calendar),

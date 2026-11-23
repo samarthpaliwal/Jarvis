@@ -1,5 +1,12 @@
 # Changelog
 
+### 0.15.1 — Google in the browser, and a HUD that stays (2026-11-23)
+- **"Google cheap flights to Seattle"** opens the Google results page in the default browser
+  (`google_search`: web, images, news, videos, maps). One page, nothing else; user requests only; asks first
+  if the request read outside content; refuses anything that looks like a key.
+- **HUD:** no longer disappears when a conversation starts during its fade-out; new menu switch
+  *Keep HUD On Screen Until I Click It*.
+
 ### 0.15.0 — A second brain, and Siri (2026-11-23)
 - **gpt-oss:120b, hosted by Ollama**, next to Claude: it steps in by itself when Claude cannot answer, or can
   be put first (menu → Brain). Nothing is installed or run on the Mac. Needs an Ollama API key.
