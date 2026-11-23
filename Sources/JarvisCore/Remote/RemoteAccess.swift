@@ -241,7 +241,7 @@ public final class LiveRemoteBackend: RemoteBackend, @unchecked Sendable {
     }
 
     public func render(_ text: String) async throws -> (data: Data, mime: String) {
-        let rate = await MainActor.run { Float(config.profile.assistant.speechRate) }
+        let rate = await MainActor.run { config.profile.assistant.appleRate }
         return try await router.render(text, rate: rate)
     }
 }

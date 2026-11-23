@@ -243,7 +243,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return NSWorkspace.shared.open(url)
         }
         dispatcher.register([
-            SystemStatusTool(), OpenAppTool(), GoogleSearchTool(open: openInBrowser), OpenWebsiteTool(open: openInBrowser), LightsTool(govee: GoveeClient()), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
+            SystemStatusTool(), OpenAppTool(), GoogleSearchTool(open: openInBrowser), OpenWebsiteTool(open: openInBrowser), LightsTool(govee: GoveeClient()), SetVolumeTool(), SpeechSpeedTool(read: { [config] in config.profile.assistant.pace }, save: { [config] in try config.save(speechSpeed: $0) }), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
             UndoLastActionTool(), ActionsTodayTool(log: actionLog),
             GetBriefingTool(service: briefing), CalendarReadTool(calendar: calendar), CalendarCreateTool(calendar: calendar),

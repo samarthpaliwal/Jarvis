@@ -181,12 +181,17 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
         switch provider {
         case .elevenlabs:
             return ["text": text, "model_id": voiceSettings.elevenLabsModel,
-                    "voice_settings": ["stability": 0.45, "similarity_boost": 0.8, "style": 0.15, "use_speaker_boost": true, "speed": 1.0]]
+                    "voice_settings": ["stability": 0.45, "similarity_boost": 0.8, "style": 0.15, "use_speaker_boost": true, "speed": SpeechPace.elevenLabs()]]
         case .openai:
-            return ["model": Self.openAIModel, "voice": voiceSettings.openAIVoice, "input": text,
-                    "instructions": voiceSettings.openAIInstructions, "response_format": "mp3"]
+            var body: JSONObject = ["model": Self.openAIModel, "voice": voiceSettings.openAIVoice, "input": text,
+                                    "instructions": voiceSettings.openAIInstructions, "response_format": "mp3"]
+            // Only the tts-1 models take a speed; the newer one is steered by its instructions.
+            if Self.openAIModel.hasPrefix("tts-1") { body["speed"] = SpeechPace.openAI() }
+            else if SpeechPace.current >= 1.15 { body["instructions"] = voiceSettings.openAIInstructions + " Speak at a brisk, quick pace." }
+            else if SpeechPace.current <= 0.9 { body["instructions"] = voiceSettings.openAIInstructions + " Speak slowly." }
+            return body
         case .kokoro:
-            return ["input": text, "voice": voiceSettings.kokoroVoice, "speed": voiceSettings.kokoroSpeed]
+            return ["input": text, "voice": voiceSettings.kokoroVoice, "speed": SpeechPace.kokoro(base: voiceSettings.kokoroSpeed)]
         }
     }
 

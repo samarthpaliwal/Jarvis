@@ -55,8 +55,17 @@ public final class Brain: ObservableObject {
     @Published public var privateMode: Bool = UserDefaults.standard.bool(forKey: "jarvis.privateMode") {
         didSet { UserDefaults.standard.set(privateMode, forKey: "jarvis.privateMode") }
     }
+    /// "Talk faster" and "talk slower", understood without a model so they work offline too.
+    static func speechSpeedAction(_ lowercased: String) -> String? {
+        let t = lowercased
+        guard ["talk", "speak", "speech", "speaking", "talking"].contains(where: t.contains) else { return nil }
+        if ["slower", "slow down", "too fast", "more slowly"].contains(where: t.contains) { return "slower" }
+        if ["faster", "speed up", "too slow", "more quickly", "quicker"].contains(where: t.contains) { return "faster" }
+        if t.contains("normal speed") || t.contains("normal pace") { return "reset" }
+        return nil
+    }
     /// Tools a small local model gets (a short list keeps it accurate).
-    static let localToolNames: Set<String> = ["system_status", "open_app", "set_volume", "music", "set_timer", "set_reminder",
+    static let localToolNames: Set<String> = ["system_status", "open_app", "set_volume", "speech_speed", "music", "set_timer", "set_reminder",
                                               "calendar_read", "calendar_create", "get_briefing", "set_mode", "undo_last_action",
                                               "memory", "memory_search", "contacts", "file_search", "set_brightness", "set_display_mode", "welcome_home"]
 
@@ -617,6 +626,7 @@ enum LocalFallback {
             return await run("set_volume", ["percent": n])
         }
         if t.contains("mute") { return await run("set_volume", ["mute": true]) }
+        if let action = Brain.speechSpeedAction(t) { return await run("speech_speed", ["action": action]) }
         if let m = t.range(of: #"timer for (\d+) (minute|second|hour)"#, options: .regularExpression) {
             let parts = t[m].split(separator: " ")
             let n = Int(parts[2]) ?? 1

@@ -35,12 +35,30 @@ public final class ConfigStore: ObservableObject {
             shellPatterns: Array(Set(fileDeny.shellPatterns + Denylist.fallback.shellPatterns)).sorted()
         )
         modes = load("modes.json", fallback: .fallback, errors: &errs)
+        SpeechPace.current = profile.assistant.pace
         let resolved = (profile.tuning ?? Tuning()).applying(env: env)
         tuning = resolved.tuning
         if !resolved.applied.isEmpty { JarvisLog.info("Tuning overridden by environment: \(resolved.applied.joined(separator: ", "))") }
         for bad in resolved.rejected { errs.append("environment: \(bad) is not a valid number") }
         errors = errs
         JarvisLog.info("Config loaded from \(directory.path)" + (errs.isEmpty ? "" : " with errors: \(errs.joined(separator: "; "))"))
+    }
+
+    /// Saves how fast Jarvis talks into profile.json and applies it at once. Only that one value is
+    /// rewritten; every other key and comment in the file stays as it was.
+    public func save(speechSpeed: Double) throws {
+        let speed = SpeechPace.clamp(speechSpeed)
+        let url = directory.appendingPathComponent("profile.json")
+        // A file that is missing or cannot be read is never replaced with a stub.
+        guard var root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+              var assistant = root["assistant"] as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+        assistant["speechSpeed"] = speed
+        root["assistant"] = assistant
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try data.write(to: url, options: .atomic)
+        profile.assistant.speechSpeed = speed
+        SpeechPace.current = speed
+        JarvisLog.info("Speech speed saved: \(speed)")
     }
 
     /// Writes modes.json (places learned by voice) and reloads.

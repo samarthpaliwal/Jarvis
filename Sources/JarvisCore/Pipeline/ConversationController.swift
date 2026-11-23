@@ -436,7 +436,7 @@ public final class ConversationController: ObservableObject {
         let mode = modes.current
         let voiceOn = mode.voice.enabled && !voiceMuted
         let volume = Float(mode.voice.volume)
-        let rate = Float(config.profile.assistant.speechRate)
+        let rate = config.profile.assistant.appleRate
         var chunker = SentenceChunker(firstChunkMinWords: config.tuning.ttsFirstChunkMinWords)
         var firstDelta = true
         var spokeSomething = false
@@ -574,7 +574,7 @@ public final class ConversationController: ObservableObject {
         transition(.announce)
         listenForStop()
         let spokenTurn = self.turn
-        speech.speak(text, volume: Float(mode.voice.volume), rate: Float(config.profile.assistant.speechRate)) { [weak self] completed in
+        speech.speak(text, volume: Float(mode.voice.volume), rate: config.profile.assistant.appleRate) { [weak self] completed in
             guard let self else { return }
             if self.turn == spokenTurn { self.transcriber.cancel() }      // a newer turn owns the recognizer
             self.lastSpokeAt = Date()
@@ -608,7 +608,7 @@ public final class ConversationController: ObservableObject {
             JarvisLog.warn("Approval refused, voice not verified: \(request.preview)", request: trace?.id)
             trace?.event(.action, "approval_refused", ["reason": "voice_not_verified"])
             if modes.current.voice.enabled && !voiceMuted {
-                speech.enqueue(why, volume: Float(modes.current.voice.volume), rate: Float(config.profile.assistant.speechRate))
+                speech.enqueue(why, volume: Float(modes.current.voice.volume), rate: config.profile.assistant.appleRate)
             }
             notch.appendReply(" " + why)
             return false
@@ -646,7 +646,7 @@ public final class ConversationController: ObservableObject {
                 currentReply = prompt
                 let guardMs = max(0, config.tuning.followUpGuardMilliseconds)
                 speech.speak(prompt, volume: Float(modes.current.voice.volume),
-                             rate: Float(config.profile.assistant.speechRate)) { [weak self] _ in
+                             rate: config.profile.assistant.appleRate) { [weak self] _ in
                     self?.lastSpokeAt = Date()
                     Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(Int(guardMs)))
@@ -927,7 +927,7 @@ extension ConversationController: EnrollmentHost {
         guard voiceOn else { try? await Task.sleep(for: .seconds(1.5)); return }
         currentReply = text
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            speech.speak(text, volume: Float(modes.current.voice.volume), rate: Float(config.profile.assistant.speechRate)) { _ in cont.resume() }
+            speech.speak(text, volume: Float(modes.current.voice.volume), rate: config.profile.assistant.appleRate) { _ in cont.resume() }
         }
         lastSpokeAt = Date()
         // Let the room go quiet, so Jarvis's own voice never ends up in the voiceprint.

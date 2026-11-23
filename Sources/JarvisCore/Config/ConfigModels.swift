@@ -18,6 +18,13 @@ public struct Profile: Codable, Equatable {
         public var speechRate: Double
         /// "ironman" adds the JARVIS mannerisms to the system prompt.
         public var persona: String?
+        /// How fast Jarvis talks, for every voice: 1.0 is natural pace, 1.3 is 30% faster (0.7 to 2.0).
+        /// "Talk faster" and "talk slower" change it. Missing means the default, 1.3.
+        public var speechSpeed: Double?
+        /// The speed actually used: the saved one, kept inside the allowed range.
+        public var pace: Double { SpeechPace.clamp(speechSpeed ?? SpeechPace.defaultSpeed) }
+        /// The Apple voice's own rate value for the current pace.
+        public var appleRate: Float { SpeechPace.appleRate(base: speechRate, speed: pace) }
     }
     public struct WakePhrase: Codable, Equatable {
         public var phrase: String

@@ -19,6 +19,8 @@
     "spokenReplyMaxSentences": 2,
     "voiceIdentifier": null,
     "speechRate": 0.52,
+    "_speechSpeedComment": "speechSpeed is how fast Jarvis talks, for every voice: 1.0 = natural pace, 1.3 = 30% faster, range 0.7 to 2.0. Saying 'talk faster' or 'talk slower' changes it by 0.1 and saves it here.",
+    "speechSpeed": 1.3,
     "persona": "ironman"
   },
   "briefing": {

@@ -578,3 +578,19 @@ budget; Ollama's own dashboard shows it.
 
 Settings: `hostedModel` (`gpt-oss:120b`), `hostedBaseURL` (`https://ollama.com`).
 
+## Speech speed
+
+Jarvis talks about 30% faster than each voice's natural pace. The one setting is `assistant.speechSpeed` in
+`~/Library/Application Support/Jarvis/config/profile.json`: 1.0 is natural, 1.3 is the default, and it accepts
+0.7 to 2.0. Every voice engine follows it (ElevenLabs stops at 1.2, its own limit).
+
+| Say | What happens |
+| --- | --- |
+| "Talk faster" / "speed up your voice" | 10% faster, saved |
+| "Talk slower" / "you talk too fast" | 10% slower, saved |
+| "Talk at normal speed" | back to the default |
+| "How fast are you talking?" | says the current speed |
+| "Undo that" | puts the previous speed back |
+
+Replies were already spoken sentence by sentence as they arrive, so the first sentence starts while the rest
+is still being written.

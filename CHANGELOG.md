@@ -1,5 +1,11 @@
 # Changelog
 
+### 0.16.0 — Faster speech (2026-11-23)
+- **One speed for every voice:** `assistant.speechSpeed` in `profile.json` (1.0 natural, default 1.3, range
+  0.7 to 2.0) drives Kokoro, ElevenLabs, OpenAI and the Apple voice. It replaces three separate knobs.
+- **"Talk faster" / "talk slower"** (`speech_speed`) move it by 0.1 and save it; "normal speed" resets it.
+  Works offline, and "undo that" puts the old speed back.
+
 ### 0.15.1 — Google in the browser, and a HUD that stays (2026-11-23)
 - **"Google cheap flights to Seattle"** opens the Google results page in the default browser
   (`google_search`: web, images, news, videos, maps). One page, nothing else; user requests only; asks first
