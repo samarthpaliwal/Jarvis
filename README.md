@@ -536,6 +536,7 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 | 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
 | 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
+| 1 free (people) | undoable | `contacts` (find, save, remove, list) |
 | 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches`, `calendar_cancel`, `email_send` |
 | 3 never | denylist.json + hard-coded floor | — |
 
@@ -549,6 +550,28 @@ schema, `targets(for:)`, `run`), then add it to the `register([...])` list in `A
 The dispatcher handles denylist, approval, logging, and the undo stack.
 
 The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
+
+## Memory: what Jarvis remembers, and for how long
+
+| Layer | Holds | Lives in | Lasts |
+|-------|-------|----------|-------|
+| This chat | Everything said since the card appeared | RAM | Until the card closes, or 10 idle minutes |
+| This sitting | A short recap of the last 6 exchanges from chats that already closed | RAM | 30 minutes, gone when Jarvis quits |
+| Preferences and facts | "prefers Celsius", "CSC 210 lab is in Gould-Simpson 701" | `USER.md`, `MEMORY.md` | Until you change them |
+| Contacts | Name, email, phone, how you refer to them | `contacts.json` | Until you remove them |
+| Archive | Every past exchange, searchable | `memory.db`, `conversations.log` | See the retention policy |
+
+Everything is in `~/Library/Application Support/Jarvis/` and `~/Library/Logs/Jarvis/` on this Mac. Nothing is synced.
+
+- **Session recap.** The card shows one chat at a time and each chat starts clean. So that "move it to four
+  instead" still works a minute later, the next chat is given a few lines about the previous ones. The recap
+  is clipped, has secrets redacted, is marked as context and not instructions, and is never written to disk
+  (`tuning.sessionMemoryMinutes`, 0 turns it off).
+- **Contacts.** "Maya is my lab partner, her email is maya@example.com" saves her. "Email my lab partner"
+  then finds her. If nobody is saved under a name, Jarvis looks in macOS Contacts, which asks for your
+  permission the first time; only the matching name, email, and phone are read. If nobody is found,
+  Jarvis asks you. It never invents an address.
+- **Nothing that looks like a credential** is stored in any layer.
 
 ## Multi-step requests and the confirmation gate
 

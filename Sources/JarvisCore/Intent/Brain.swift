@@ -28,6 +28,8 @@ public final class Brain: ObservableObject {
     @Published public private(set) var isOnline = true
     private let pathMonitor = NWPathMonitor()
     public var memory: MemoryStore?
+    /// Short-term memory across the chats of one sitting (RAM only).
+    public let session = SessionMemory()
     public var skills: SkillLibrary?
     public var local: OllamaClient?
     /// Private Mode: every turn goes to the local model, nothing to the cloud.
@@ -37,7 +39,7 @@ public final class Brain: ObservableObject {
     /// Tools a small local model gets (a short list keeps it accurate).
     static let localToolNames: Set<String> = ["system_status", "open_app", "set_volume", "music", "set_timer", "set_reminder",
                                               "calendar_read", "calendar_create", "get_briefing", "set_mode", "undo_last_action",
-                                              "memory", "memory_search", "file_search", "set_brightness", "set_display_mode", "welcome_home"]
+                                              "memory", "memory_search", "contacts", "file_search", "set_brightness", "set_display_mode", "welcome_home"]
 
     public var model: String {
         Env.value("CLAUDE_MODEL").flatMap { $0.isEmpty ? nil : $0 } ?? config.profile.claude.model
@@ -61,6 +63,7 @@ public final class Brain: ObservableObject {
         guard !history.isEmpty else { return }
         JarvisLog.info("Chat ended: cleared \(history.count) message(s) from the active conversation (kept in conversations.log)")
         history.removeAll()
+        session.closeChat()
         generation += 1
     }
 
@@ -89,7 +92,9 @@ public final class Brain: ObservableObject {
     }
 
     private func respondOnce(to userText: String, onText: @escaping (String) -> Void) async throws -> Turn {
-        if Date().timeIntervalSince(lastActivity) > historyTimeout { history.removeAll() }
+        if Date().timeIntervalSince(lastActivity) > historyTimeout { history.removeAll(); session.closeChat() }
+        session.keepMinutes = config.tuning.sessionMemoryMinutes
+        session.maxExchanges = config.tuning.sessionMemoryExchanges
         lastActivity = Date()
         var turn = Turn()
 
@@ -123,11 +128,16 @@ public final class Brain: ObservableObject {
         var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
         if let catalog = skills?.catalog { stable += "\n\n" + catalog }          // changes only when skills are installed
         if config.profile.memory?.enabled ?? true, let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
+        // Short-term: what was said in chats that already closed. It rides in the uncached part of the prompt.
+        if let recent = session.promptBlock() { volatile = recent + "\n\n" + volatile }
         // Web tools first so the cache breakpoint stays on the last custom tool.
         let tools = Self.webTools(model: model, profile: config.profile, mode: mode, fetchMaxContentTokens: config.tuning.webFetchMaxContentTokens)
             + dispatcher.definitions(for: mode)
         var guardian = LoopGuard(budget: config.tuning.toolCallBudgetPerTurn)
-        defer { if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) } }
+        defer {
+            if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
+            if !turn.text.isEmpty { session.note(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
+        }
 
         for round in 0...maxToolRounds {
             convo = Self.sanitized(convo)

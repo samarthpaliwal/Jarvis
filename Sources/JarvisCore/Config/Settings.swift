@@ -151,6 +151,11 @@ public struct Tuning: Codable, Equatable, Sendable {
     /// Warm Claude's prompt cache when a request starts and the last one was longer ago than this. 0 turns it off.
     public var cachePrewarmAfterSeconds: Double = 240
 
+    // Short-term memory
+    /// A new chat is told about chats from the last this-many minutes. Kept in RAM only. 0 turns it off.
+    public var sessionMemoryMinutes: Double = 30
+    public var sessionMemoryExchanges: Int = 6
+
     // Echo: Jarvis hearing its own voice
     /// When talking over Jarvis interrupts it: "headphones" (only when the mic cannot hear the speakers),
     /// "always", or "never". Saying "stop" or the wake word always works.
@@ -220,6 +225,8 @@ public struct Tuning: Codable, Equatable, Sendable {
         endpointFastMinWords = try c.decodeIfPresent(Int.self, forKey: .endpointFastMinWords) ?? endpointFastMinWords
         ttsFirstChunkMinWords = try c.decodeIfPresent(Int.self, forKey: .ttsFirstChunkMinWords) ?? ttsFirstChunkMinWords
         cachePrewarmAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .cachePrewarmAfterSeconds) ?? cachePrewarmAfterSeconds
+        sessionMemoryMinutes = try c.decodeIfPresent(Double.self, forKey: .sessionMemoryMinutes) ?? sessionMemoryMinutes
+        sessionMemoryExchanges = try c.decodeIfPresent(Int.self, forKey: .sessionMemoryExchanges) ?? sessionMemoryExchanges
         speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn
         followUpGuardMilliseconds = try c.decodeIfPresent(Double.self, forKey: .followUpGuardMilliseconds) ?? followUpGuardMilliseconds
         echoWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .echoWindowSeconds) ?? echoWindowSeconds

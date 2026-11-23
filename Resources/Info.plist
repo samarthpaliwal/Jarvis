@@ -38,6 +38,8 @@
     <string>Jarvis switches between Home, Class, Work and Road modes based on where you are. Location stays on this Mac.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>Jarvis switches modes in the background based on where you are. Location stays on this Mac and is never sent to Claude.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Jarvis looks up a person's email address or phone number when you ask it to write to them. Only the matching name, email and phone are read.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Jarvis controls apps like Music, Finder and Notes when you ask it to.</string>
     <key>NSContactsUsageDescription</key>
