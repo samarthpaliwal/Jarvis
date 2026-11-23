@@ -63,6 +63,16 @@ public final class ToolDispatcher {
         RequestTrace.current?.tool(name, ms: nil, outcome: "ran", tier: Tier.auto.rawValue)
     }
 
+    typealias Confirmer = @MainActor @Sendable (String) async -> Bool
+    @TaskLocal static var confirmer: Confirmer?
+
+    /// For tools: ask the user to approve one specific thing before doing it. False when the user says no,
+    /// does not answer, or the call did not come from a live user turn. Outside a tool call it is always false.
+    public static func confirm(_ preview: String) async -> Bool {
+        guard let confirmer else { return false }
+        return await confirmer(preview)
+    }
+
     public func register(_ tool: JarvisTool) { tools[tool.name] = tool }
     public func register(_ list: [JarvisTool]) { list.forEach(register) }
 
@@ -119,7 +129,7 @@ public final class ToolDispatcher {
                 record("refused", tier: .approve, summary: "non-user source \(source.rawValue)")
                 return .error(DispatchError.proactiveCannotApprove(name).localizedDescription)
             }
-            let request = ApprovalRequest(toolName: name, preview: tool.preview(for: input))
+            let request = ApprovalRequest(toolName: name, preview: await tool.approvalPreview(for: input, context: context))
             guard let handler = approvalHandler else {
                 record("denied", tier: .approve, summary: "no approval handler")
                 return .error(DispatchError.needsApproval(name).localizedDescription)
@@ -134,8 +144,22 @@ public final class ToolDispatcher {
         do {
             // A tool that hangs (one Gmail call once ran for 15 minutes) must not hang the request.
             let context = context
-            var result = try await withDeadline("\(name)", seconds: toolTimeout) { @MainActor in
-                try await tool.run(input: input, context: context)
+            // A tool may need a yes for one particular case (moving an event other people are invited to).
+            // It asks through ToolDispatcher.confirm, which reaches the same approval card and voice prompt,
+            // and only for calls that come from a live user turn.
+            let ask: Confirmer = { [weak self] preview in
+                guard let self, source == .user, let handler = self.approvalHandler else {
+                    record("refused", tier: .approve, summary: "confirmation not available: \(preview)")
+                    return false
+                }
+                let ok = await handler(ApprovalRequest(toolName: name, preview: preview))
+                record(ok ? "approved" : "rejected", tier: .approve, summary: preview)
+                return ok
+            }
+            var result = try await Self.$confirmer.withValue(ask) {
+                try await withDeadline("\(name)", seconds: toolTimeout) { @MainActor in
+                    try await tool.run(input: input, context: context)
+                }
             }
             let redacted = SecretRedactor.redact(result.content)
             if !redacted.kinds.isEmpty {

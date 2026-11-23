@@ -534,7 +534,8 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 | 1 free | reversible, logged, undoable | `open_app`, `set_volume`, `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
 | 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
-| 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches` |
+| 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
+| 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches`, `calendar_cancel` |
 | 3 never | denylist.json + hard-coded floor | — |
 
 Prompt-injection defence: `file_read` (and the email / web / calendar tools in Milestone 5) wrap
@@ -546,6 +547,26 @@ schema, `targets(for:)`, `run`), then add it to the `register([...])` list in `A
 The dispatcher handles denylist, approval, logging, and the undo stack.
 
 The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
+
+## Calendar: list, create, move, cancel
+
+Jarvis works on every account in macOS Calendar (iCloud, Google, Exchange) through EventKit.
+
+| Say | Tool | Safety |
+|-----|------|--------|
+| "What's on tomorrow?" | `calendar_read` | Read-only. Marks events that repeat, have other people invited, or are read-only. |
+| "Add office hours Friday at 2." | `calendar_create` | Undoable ("undo that" deletes it). |
+| "Move calculus tomorrow to 3." | `calendar_move` | Undoable (moves it back). Keeps the event's length. |
+| "Cancel my dentist appointment." | `calendar_cancel` | Always asks first. Undo puts back a copy. |
+
+- **Finding the event.** You name it by a few words and the day. If nothing matches, or two events do, Jarvis
+  asks which one instead of guessing.
+- **Other people.** Moving or cancelling an event with invitees can notify them, which is a message sent on
+  your behalf. Jarvis asks first, and a proactive feature can never do it.
+- **Cancelling.** The approval names the event that will really be deleted, with its date and time, not just
+  the words you used.
+- **Repeating events.** Only the occurrence you named changes. The rest of the series is untouched.
+- **Read-only calendars** (holidays, a subscribed class schedule) are never changed.
 
 ## Echo: keeping Jarvis from hearing itself
 

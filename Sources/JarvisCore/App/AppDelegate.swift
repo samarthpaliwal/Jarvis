@@ -168,6 +168,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
             UndoLastActionTool(), ActionsTodayTool(log: actionLog),
             GetBriefingTool(service: briefing), CalendarReadTool(calendar: calendar), CalendarCreateTool(calendar: calendar),
+            CalendarMoveTool(calendar: calendar), CalendarCancelTool(calendar: calendar),
             SetReminderTool(calendar: calendar), EmailSearchTool(gmail: gmail), EmailReadTool(gmail: gmail), EmailDraftTool(gmail: gmail),
             NotionSearchTool(client: notion), NotionCreateNoteTool(client: notion),
             SetBrightnessTool(), SetFocusTool(), RememberPlaceTool(detector: context),

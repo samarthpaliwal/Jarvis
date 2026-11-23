@@ -1,8 +1,25 @@
 import EventKit
 import Foundation
 
+/// What the calendar tools need. `CalendarService` implements it with EventKit; tests use a fake,
+/// so no test ever touches the real calendar.
+public protocol CalendarProviding: AnyObject, Sendable {
+    func events(from: Date, to: Date) async throws -> [CalendarService.Item]
+    func incompleteReminders(dueBefore: Date?) async throws -> [CalendarService.Item]
+    @discardableResult
+    func createEvent(title: String, start: Date, end: Date, location: String?, notes: String?, allDay: Bool) async throws -> CalendarService.Item
+    /// Moves this one occurrence. Returns the event as it is afterwards.
+    func moveEvent(_ item: CalendarService.Item, start: Date, end: Date) async throws -> CalendarService.Item
+    /// Removes this one occurrence.
+    func cancelEvent(_ item: CalendarService.Item) async throws
+    func deleteEvent(id: String) throws
+    @discardableResult
+    func createReminder(title: String, due: Date?, notes: String?) async throws -> CalendarService.Item
+    func deleteReminder(id: String) throws
+}
+
 /// EventKit wrapper: calendar events and reminders. Full-access prompts appear on first use.
-public final class CalendarService: @unchecked Sendable {
+public final class CalendarService: CalendarProviding, @unchecked Sendable {
     public struct Item: Equatable, Sendable {
         public var id: String
         public var title: String
@@ -13,13 +30,24 @@ public final class CalendarService: @unchecked Sendable {
         public var calendar: String
         public var notes: String?
         public var isReminder: Bool
+        /// Part of a repeating series. Moves and cancellations touch only this occurrence.
+        public var isRecurring = false
+        /// Other people invited. Changing the event may notify them.
+        public var attendees = 0
+        /// False for subscribed or read-only calendars (holidays, a shared class schedule).
+        public var editable = true
     }
 
     public enum CalendarError: LocalizedError {
         case denied(String)
+        case notFound(String)
+        case readOnly(String)
         public var errorDescription: String? {
-            if case .denied(let what) = self { return "\(what) access was not granted. System Settings → Privacy & Security → \(what)." }
-            return nil
+            switch self {
+            case .denied(let what): return "\(what) access was not granted. System Settings → Privacy & Security → \(what)."
+            case .notFound(let title): return "I couldn't find “\(title)” in the calendar any more."
+            case .readOnly(let cal): return "That event is on “\(cal)”, which is read-only, so I can't change it."
+            }
         }
     }
 
@@ -42,9 +70,40 @@ public final class CalendarService: @unchecked Sendable {
         return store.events(matching: pred)
             .sorted { $0.startDate < $1.startDate }
             .map { e in
-                Item(id: e.eventIdentifier ?? "", title: e.title ?? "(untitled)", start: e.startDate, end: e.endDate,
-                     isAllDay: e.isAllDay, location: e.location, calendar: e.calendar.title, notes: e.notes, isReminder: false)
+                Self.item(e)
             }
+    }
+
+    static func item(_ e: EKEvent) -> Item {
+        Item(id: e.eventIdentifier ?? "", title: e.title ?? "(untitled)", start: e.startDate, end: e.endDate,
+             isAllDay: e.isAllDay, location: e.location, calendar: e.calendar.title, notes: e.notes, isReminder: false,
+             isRecurring: e.hasRecurrenceRules, attendees: (e.attendees ?? []).filter { !$0.isCurrentUser }.count,
+             editable: e.calendar.allowsContentModifications)
+    }
+
+    /// The live event behind an item. Repeating events share one identifier, so the start time picks the occurrence.
+    private func find(_ item: Item) throws -> EKEvent {
+        guard let start = item.start else { throw CalendarError.notFound(item.title) }
+        let pred = store.predicateForEvents(withStart: start.addingTimeInterval(-60), end: (item.end ?? start).addingTimeInterval(60), calendars: nil)
+        guard let e = store.events(matching: pred).first(where: { $0.eventIdentifier == item.id && abs($0.startDate.timeIntervalSince(start)) < 60 }) else {
+            throw CalendarError.notFound(item.title)
+        }
+        guard e.calendar.allowsContentModifications else { throw CalendarError.readOnly(e.calendar.title) }
+        return e
+    }
+
+    public func moveEvent(_ item: Item, start: Date, end: Date) async throws -> Item {
+        guard await requestEvents() else { throw CalendarError.denied("Calendars") }
+        let e = try find(item)
+        e.startDate = start
+        e.endDate = end
+        try store.save(e, span: .thisEvent, commit: true)
+        return Self.item(e)
+    }
+
+    public func cancelEvent(_ item: Item) async throws {
+        guard await requestEvents() else { throw CalendarError.denied("Calendars") }
+        try store.remove(try find(item), span: .thisEvent, commit: true)
     }
 
     public func incompleteReminders(dueBefore: Date?) async throws -> [Item] {

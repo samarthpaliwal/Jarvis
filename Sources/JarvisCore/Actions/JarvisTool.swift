@@ -52,6 +52,9 @@ public protocol JarvisTool: AnyObject {
     func targets(for input: JSONObject) -> ToolTargets
     /// Human sentence shown in the approval card ("Run `rm -rf ~/Library/Caches/foo`").
     func preview(for input: JSONObject) -> String
+    /// The sentence the user approves. Override when it should name what will really be touched
+    /// (the exact event, the real recipient) rather than repeat the input. Default: `preview(for:)`.
+    @MainActor func approvalPreview(for input: JSONObject, context: ToolContext) async -> String
     func run(input: JSONObject, context: ToolContext) async throws -> ToolResult
 }
 
@@ -61,6 +64,7 @@ public extension JarvisTool {
         let args = input.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ")
         return "\(name)(\(args))"
     }
+    @MainActor func approvalPreview(for input: JSONObject, context: ToolContext) async -> String { preview(for: input) }
     /// Claude-facing definition.
     var definition: JSONObject {
         ["name": name, "description": description, "input_schema": inputSchema]
