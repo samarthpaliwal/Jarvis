@@ -61,7 +61,12 @@ final class FakeSpeech: SpeechOutput {
     func speak(_ text: String, volume: Float, rate: Float, onFinished: @escaping (Bool) -> Void) { spoken.append(text); isSpeaking = true; drained = onFinished; onAudioStart?("fake") }
     func enqueue(_ text: String, volume: Float, rate: Float) { spoken.append(text); isSpeaking = true; onAudioStart?("fake") }
     func whenQueueDrained(_ onFinished: @escaping (Bool) -> Void) { drained = onFinished }
-    func stop() { isSpeaking = false; let d = drained; drained = nil; d?(false) }
+    /// Real voices tell the pipeline they stopped a moment after `stop()` returns, not during it.
+    var reportsStopLater = false
+    func stop() {
+        isSpeaking = false; let d = drained; drained = nil
+        if reportsStopLater { DispatchQueue.main.async { d?(false) } } else { d?(false) }
+    }
     var isWaitingToFinish: Bool { drained != nil }
     func finishSpeaking() { isSpeaking = false; let d = drained; drained = nil; d?(true) }
 }
@@ -144,6 +149,39 @@ final class PipelineStagesTests: XCTestCase {
         XCTAssertTrue(intent.heard.isEmpty, "nothing reaches the model")
         XCTAssertTrue(speech.spoken.isEmpty)
         XCTAssertEqual(c.trace?.finish(outcome: "x")["outcome"] as? String, "no_speech")
+    }
+
+    func testARequestSpokenRightAfterCuttingInIsHeard() async {
+        let wake = FakeWake(), stt = FakeTranscriber(), intent = FakeIntent(), speech = FakeSpeech()
+        speech.reportsStopLater = true
+        let c = makeController(wake, stt, intent, speech)
+        wake.fire()
+        stt.say("find my iphone")
+        await wait("speech") { speech.isWaitingToFinish }
+        XCTAssertEqual(c.state, .speaking)
+
+        wake.fire()                                   // "Hey Jarvis" over the reply
+        XCTAssertEqual(c.state, .listening)
+        try? await Task.sleep(for: .milliseconds(80)) // the voice reports that it stopped
+        stt.say("what's on my calendar")
+        await wait("the second request") { intent.heard.count == 2 }
+        XCTAssertEqual(intent.heard, ["find my iphone", "what's on my calendar"])
+        XCTAssertEqual(c.illegalTransitions, 0)
+    }
+
+    func testTalkingOverJarvisKeepsListeningForTheRestOfTheSentence() async {
+        let wake = FakeWake(), stt = FakeTranscriber(), intent = FakeIntent(), speech = FakeSpeech()
+        speech.reportsStopLater = true
+        let c = makeController(wake, stt, intent, speech, env: ["JARVIS_SPEECH_BARGE_IN": "always"])
+        wake.fire()
+        stt.say("tell me about tucson")
+        await wait("speech") { speech.isWaitingToFinish }
+        stt.say("actually open my calendar")           // no wake word
+        XCTAssertEqual(c.state, .listening)
+        try? await Task.sleep(for: .milliseconds(80))
+        stt.say("actually open my calendar for friday")
+        await wait("the interruption") { intent.heard.count == 2 }
+        XCTAssertEqual(intent.heard.last, "actually open my calendar for friday")
     }
 
     func testStopCancelsFromAnyPoint() async {

@@ -522,11 +522,15 @@ public final class ConversationController: ObservableObject {
         if !spokeSomething { speech.enqueue(turn.text.isEmpty ? "Done." : turn.text, volume: volume, rate: rate) }
         transition(.replyStarted)
         listenForStop()
+        let spokenTurn = self.turn
         speech.whenQueueDrained { [weak self] completed in
             guard let self else { return }
             request?.event(.spoken, "speech_done", ["completed": completed])
             request?.finish(outcome: failed ? "error" : completed ? "spoken" : "interrupted")
-            self.transcriber.cancel()
+            // Real voices report "stopped" a moment after being cut off. By then a wake word or an
+            // interruption has already started listening for the next request, and the recognizer
+            // belongs to that turn: cancelling it here is what used to make the second request vanish.
+            if self.turn == spokenTurn { self.transcriber.cancel() }
             self.lastSpokeAt = Date()
             if self.state == .speaking {
                 self.transition(.replyFinished)
@@ -569,9 +573,10 @@ public final class ConversationController: ObservableObject {
         currentReply = text   // so the cut-in listener can tell this announcement from the user
         transition(.announce)
         listenForStop()
+        let spokenTurn = self.turn
         speech.speak(text, volume: Float(mode.voice.volume), rate: Float(config.profile.assistant.speechRate)) { [weak self] completed in
             guard let self else { return }
-            self.transcriber.cancel()
+            if self.turn == spokenTurn { self.transcriber.cancel() }      // a newer turn owns the recognizer
             self.lastSpokeAt = Date()
             if self.state == .speaking {
                 self.transition(.replyFinished)
