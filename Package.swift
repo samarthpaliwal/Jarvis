@@ -4,6 +4,7 @@ import PackageDescription
 // Jarvis is split in two targets:
 //  - JarvisCore: all app logic (testable library)
 //  - Jarvis:     a thin executable that boots NSApplication
+//  - JarvisObjC: a tiny Objective-C shim for catching NSException
 let package = Package(
     name: "Jarvis",
     platforms: [.macOS(.v14)],
@@ -16,9 +17,12 @@ let package = Package(
         .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", from: "1.20.0"),
     ],
     targets: [
+        // Objective-C shim: turns NSException into a Swift error (AVAudioEngine raises them).
+        .target(name: "JarvisObjC", path: "Sources/JarvisObjC"),
         .target(
             name: "JarvisCore",
             dependencies: [
+                "JarvisObjC",
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
             ],
             path: "Sources/JarvisCore",

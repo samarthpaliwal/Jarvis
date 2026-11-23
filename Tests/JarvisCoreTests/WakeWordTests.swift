@@ -72,3 +72,25 @@ final class WakeWordTests: XCTestCase {
         return Array(UnsafeBufferPointer(start: data[0], count: Int(buffer.frameLength)))
     }
 }
+
+import JarvisObjC
+
+final class AudioRecoveryTests: XCTestCase {
+    /// The 2026-11-22 crash: AVAudioEngine raised NSException from installTap and the app aborted.
+    func testObjCExceptionBecomesSwiftError() {
+        XCTAssertThrowsError(try ObjCException.catching {
+            NSException(name: .internalInconsistencyException, reason: "required condition is false: format.sampleRate == hwFormat.sampleRate").raise()
+        }) { error in
+            XCTAssertTrue(error.localizedDescription.contains("required condition is false"))
+        }
+        XCTAssertNoThrow(try ObjCException.catching { _ = 1 + 1 })
+    }
+
+    func testBackoffDoublesAndCaps() {
+        XCTAssertEqual(AudioCapture.backoff(base: 1, attempt: 0, cap: 60), 1)
+        XCTAssertEqual(AudioCapture.backoff(base: 1, attempt: 3, cap: 60), 8)
+        XCTAssertEqual(AudioCapture.backoff(base: 6, attempt: 2, cap: 60), 24)
+        XCTAssertEqual(AudioCapture.backoff(base: 6, attempt: 10, cap: 60), 60)
+        XCTAssertEqual(AudioCapture.backoff(base: 6, attempt: 10_000, cap: 60), 60, "huge attempt counts must not overflow")
+    }
+}

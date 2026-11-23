@@ -1,6 +1,7 @@
 import AVFoundation
 import AppKit
 import Foundation
+import JarvisObjC
 
 public enum AudioCaptureError: LocalizedError {
     case noInputDevice
@@ -48,9 +49,35 @@ public final class AudioCapture: @unchecked Sendable {
                                       qos: ProcessInfo.processInfo.environment["JARVIS_AUDIO_QOS"] == "userInitiated" ? .userInitiated : .utility)
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioCapture.sampleRate,
                                           channels: 1, interleaved: false)!
+    /// Owned by the render thread: built lazily from the format of the buffers that actually arrive.
     private var converter: AVAudioConverter?
     private var pending: [Float] = []
     private var observers: [Any] = []
+
+    /// Restart control (main thread only). Device changes arrive in bursts, so restarts are coalesced,
+    /// and failures back off instead of hammering CoreAudio.
+    private var restartScheduled = false
+    private var failedRestarts = 0
+    /// Consecutive watchdog rebuilds that produced no audio. Drives the silence backoff and the "deaf" signal.
+    private var silentRebuilds = 0
+    public var tuning = Tuning()
+
+    public struct Tuning: Equatable, Sendable {
+        /// Wait this long after a device change before rebuilding, so a burst becomes one restart.
+        public var restartDebounce: TimeInterval = 0.5
+        /// No audio for this long means the tap went silent.
+        public var silenceTimeout: TimeInterval = 6
+        /// Upper bound for the silence and failure backoff.
+        public var maxBackoff: TimeInterval = 60
+        /// After this many silent rebuilds in a row, report that the microphone is not delivering audio.
+        public var deafAfterRebuilds = 3
+        public init() {}
+    }
+
+    /// 0.5 s, 1 s, 2 s … capped. Pure so it can be tested.
+    public static func backoff(base: TimeInterval, attempt: Int, cap: TimeInterval) -> TimeInterval {
+        min(cap, base * pow(2, Double(max(0, min(attempt, 16)))))
+    }
 
     public init() {}
 
@@ -72,15 +99,30 @@ public final class AudioCapture: @unchecked Sendable {
         startWatchdog()
     }
 
-    /// If no audio arrives for 6 s while we think we're running, rebuild the engine.
+    /// If no audio arrives while we think we're running, rebuild the engine. Each rebuild that still
+    /// yields nothing doubles the wait, so a dead input device costs one rebuild a minute, not one every 9 s.
     private func startWatchdog() {
         watchdog?.invalidate()
         watchdog = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            guard let self, self.isRunning else { return }
-            if Date().timeIntervalSince(self.lastChunkAt) > 6 {
-                JarvisLog.warn("Audio watchdog: no microphone audio for 6 s; rebuilding the audio engine")
-                self.restart(reason: "watchdog: tap went silent")
+            guard let self, self.isRunning, !self.restartScheduled else { return }
+            let silence = Date().timeIntervalSince(self.lastChunkAt)
+            if silence < self.tuning.silenceTimeout {
+                if self.silentRebuilds > 0 {
+                    JarvisLog.info("Audio watchdog: microphone audio is back after \(self.silentRebuilds) rebuild(s)")
+                    if self.silentRebuilds >= self.tuning.deafAfterRebuilds { self.onStateChange?("hearing") }
+                    self.silentRebuilds = 0
+                }
+                return
             }
+            let limit = Self.backoff(base: self.tuning.silenceTimeout, attempt: self.silentRebuilds, cap: self.tuning.maxBackoff)
+            guard silence > limit else { return }
+            self.silentRebuilds += 1
+            JarvisLog.warn("Audio watchdog: no microphone audio for \(Int(silence)) s; rebuilding the audio engine (attempt \(self.silentRebuilds))")
+            if self.silentRebuilds == self.tuning.deafAfterRebuilds {
+                JarvisLog.error("Microphone “\(AudioDeviceInfo.defaultInputDeviceName())” is delivering no audio after \(self.silentRebuilds) rebuilds")
+                self.onStateChange?("deaf")
+            }
+            self.restart(reason: "watchdog: tap went silent")
         }
     }
 
@@ -93,8 +135,11 @@ public final class AudioCapture: @unchecked Sendable {
     }
 
     private func teardownEngine() {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        // AVAudioEngine raises NSException when the device vanished under it; never let that abort the app.
+        try? ObjCException.catching { [engine] in
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
     }
 
@@ -102,31 +147,45 @@ public final class AudioCapture: @unchecked Sendable {
         teardownEngine()
         engine = AVAudioEngine()
         configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            self?.restart(reason: "input device changed")
+            self?.scheduleRestart(reason: "input device changed")
         }
         lastChunkAt = Date()
-        let input = engine.inputNode
-        let inFormat = input.outputFormat(forBus: 0)
-        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw AudioCaptureError.noInputDevice }
-        guard let conv = AVAudioConverter(from: inFormat, to: outFormat) else { throw AudioCaptureError.converterUnavailable }
-        // Speech-band resampling for a 16 kHz wake word model does not need mastering quality.
-        conv.sampleRateConverterQuality = AVAudioQuality.low.rawValue
-        conv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
-        converter = conv
-        input.removeTap(onBus: 0)
-        // ~200 ms buffers = 5 render callbacks/s; output is re-chunked to 80 ms below.
-        let bufferSize = AVAudioFrameCount(inFormat.sampleRate * 0.2)
-        input.installTap(onBus: 0, bufferSize: bufferSize, format: inFormat) { [weak self] buffer, _ in
-            self?.handle(buffer)
+        let engine = engine
+        var inFormat = AVAudioFormat()
+        var startError: Error?
+        var noDevice = false
+        // installTap, inputNode and start can all raise NSException while a device is appearing or
+        // disappearing (this crashed the app on 2026-11-22). Catch it and let the caller retry.
+        try ObjCException.catching {
+            let input = engine.inputNode
+            inFormat = input.outputFormat(forBus: 0)
+            guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { noDevice = true; return }
+            input.removeTap(onBus: 0)
+            // ~200 ms buffers = 5 render callbacks/s; output is re-chunked to 80 ms below.
+            // format nil = "whatever the hardware delivers", so a format that changed between the
+            // lines above and here cannot raise a mismatch exception.
+            let bufferSize = AVAudioFrameCount(inFormat.sampleRate * 0.2)
+            input.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, _ in
+                self?.handle(buffer)
+            }
+            engine.prepare()
+            do { try engine.start() } catch { startError = error }
         }
-        engine.prepare()
-        try engine.start()
+        if noDevice { throw AudioCaptureError.noInputDevice }
+        if let startError { throw startError }
         isRunning = true
         JarvisLog.info("Audio capture started on “\(AudioDeviceInfo.defaultInputDeviceName())”: \(Int(inFormat.sampleRate)) Hz, \(inFormat.channelCount) ch → 16 kHz mono; mic permission: \(Self.microphoneStatus.rawValue)")
     }
 
     /// Runs on the audio render thread: resample, then hand off to our queue.
     private func handle(_ buffer: AVAudioPCMBuffer) {
+        if converter == nil || converter?.inputFormat != buffer.format {
+            guard buffer.format.sampleRate > 0, let conv = AVAudioConverter(from: buffer.format, to: outFormat) else { return }
+            // Speech-band resampling for a 16 kHz wake word model does not need mastering quality.
+            conv.sampleRateConverterQuality = AVAudioQuality.low.rawValue
+            conv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
+            converter = conv
+        }
         guard let converter else { return }
         let ratio = outFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
@@ -168,8 +227,20 @@ public final class AudioCapture: @unchecked Sendable {
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                                           object: nil, queue: .main) { [weak self] _ in
             // Give CoreAudio a moment to bring devices back after sleep.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self?.restart(reason: "wake from sleep") }
+            self?.scheduleRestart(reason: "wake from sleep", delay: 1.5)
         })
+    }
+
+    /// Coalesces bursts of restart requests into one. Main thread.
+    private func scheduleRestart(reason: String, delay: TimeInterval? = nil) {
+        guard !restartScheduled else { return }
+        restartScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + (delay ?? tuning.restartDebounce)) { [weak self] in
+            guard let self else { return }
+            self.restartScheduled = false
+            guard self.watchdog != nil else { return }   // stopped meanwhile
+            self.restart(reason: reason)
+        }
     }
 
     private func restart(reason: String) {
@@ -179,10 +250,15 @@ public final class AudioCapture: @unchecked Sendable {
         queue.async { self.pending.removeAll() }
         do {
             try installTapAndStart()
+            failedRestarts = 0
             onStateChange?("restarted: \(reason)")
         } catch {
-            JarvisLog.error("Audio capture restart failed: \(error.localizedDescription)")
+            failedRestarts += 1
+            let wait = Self.backoff(base: 1, attempt: failedRestarts - 1, cap: tuning.maxBackoff)
+            JarvisLog.error("Audio capture restart failed (attempt \(failedRestarts), retrying in \(Int(wait)) s): \(error.localizedDescription)")
             onStateChange?("failed: \(error.localizedDescription)")
+            if failedRestarts == tuning.deafAfterRebuilds { onStateChange?("deaf") }
+            scheduleRestart(reason: "retry after failure", delay: wait)
         }
     }
 }
