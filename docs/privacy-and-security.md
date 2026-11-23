@@ -64,7 +64,7 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 |------|-----------|-------------|
 | 0 automatic | read-only, runs on Anthropic's side | `web_search`, `web_fetch` |
 | 0 automatic | read-only | `system_status`, `file_search`, `file_read`, `get_location_context`, `actions_today`, `get_briefing`, `calendar_read`, `email_search`, `email_read`, `notion_search` |
-| 1 free | reversible, logged, undoable | `open_app`, `google_search`, `open_website`, `lights`, `computer` (its own gates, see features), `set_volume`, `speech_speed`, `owner_lock` (asks for Touch ID itself), `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
+| 1 free | reversible, logged, undoable | `open_app`, `google_search`, `open_website`, `lights`, `computer` (its own gates, see features), `set_volume`, `speech_speed`, `owner_lock` (asks for Touch ID itself), `devices` (own devices only; asks first after outside content), `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
 | 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
 | 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
@@ -183,6 +183,71 @@ already tied to you by pairing.
 **Debugging a false reject.** `~/Library/Logs/Jarvis/face.log` has one line per change of state with the
 time, the score and the reason (for example `unknown score=0.41 best score 0.41 is under 0.45`). It never
 contains pictures or face measurements.
+
+## Owner lock: your phone as a passive key
+
+The second, optional check: is your iPhone near the Mac. Nothing for you to do once it is set.
+
+**How the phone is recognised.** iPhones change their Bluetooth address every few minutes, so plain scanning
+cannot follow one. Three ways were looked at on this Mac:
+
+| Option | What it needs | Verdict |
+| --- | --- | --- |
+| Signal strength of a paired device (classic Bluetooth) | the iPhone paired and connected to the Mac | Not usable: the iPhone is not in the Mac's paired list, and an iPhone only holds such a connection during hotspot or audio use. |
+| Listening for the phone's own Bluetooth announcements, with macOS resolving whose phone it is | the phone signed in to the same Apple account as the Mac | **Chosen.** macOS already resolves the changing address for your own devices and hands Jarvis one stable identity ("Samarth’s iPhone"). Measured here: heard 4 to 8 times a second at about -50, the same identity before and after a restart. Listen-only; nothing installed on the phone. |
+| A small companion app on the phone that announces a fixed identifier | an iOS app built in Xcode and re-signed every 7 days with a free Apple account (or a paid developer account) | Kept as the fallback. Minimum version: one screen, one background Bluetooth announcement. Only worth building if the chosen way proves flaky. |
+| Phone and Mac on the same network (Tailscale or Wi-Fi) | nothing new | Too coarse and too sleepy: the phone showed "offline, last seen 1h" while lying next to the Mac. |
+
+**Smoothing and hysteresis.** The signal is averaged over about four seconds. "Near" needs -72 or better;
+"away" needs -88 or worse for 45 seconds (the grace period), or silence for 90. The two thresholds are kept
+at least 6 apart, so standing at the edge of the room does not flicker the lock.
+
+**Both checks together.**
+
+| Face | Phone | What works |
+| --- | --- | --- |
+| you | near | everything |
+| you | away, or Bluetooth trouble | calendar, reminders, notes, contacts, memory, device status |
+| not visible, or camera trouble | near | the same limited set |
+| someone else | anything | general only: an unknown face closes everything personal, even with your phone on the desk |
+| not visible | away | general only |
+
+Sensitive means: email (reading, drafting, sending), files, briefings, shell commands, computer control,
+skills, moving or cancelling events, clearing caches, changing Voice ID, and any tool added later. A refusal
+says which check failed. With only one check set up, that one alone decides.
+
+**Fails closed.** Bluetooth off, Bluetooth not allowed for Jarvis, the radar switched off, or the phone not
+heard yet all count as "phone not near".
+
+**Limits.** Bluetooth range is tens of metres, so "near" means "in or next to the room", not "in your hand":
+a phone left on the desk passes the phone check (which is why an unknown face overrides it). A relay attack,
+where someone forwards your phone's radio from elsewhere, is possible in principle; that takes equipment and
+intent. The Apple Watch, iPad and AirPods are recognised the same way and could be used instead of the phone.
+
+**The phone's identity** (a random-looking identifier macOS gives Jarvis, and the phone's name) is kept in
+Jarvis's settings on this Mac and is never sent anywhere.
+
+## Connected devices
+
+One layer (`Sources/JarvisCore/Devices/`) for everything Jarvis is connected to. Each device answers "how are
+you" and, if it can, takes a short message. Today:
+
+| Device | Status | Messages |
+| --- | --- | --- |
+| Email (Gmail) | connected or not; how many unread and who the newest is from (both checks needed) | no (the email tools send mail, with approval) |
+| This Mac | awake, battery, power | n/a |
+| Each paired phone or iPad | paired, notifications on or off, last used, near or away | Mac → device as a notification; device → Mac as a note on screen |
+
+Every call goes through the owner lock: personal detail is left out of the status, nothing is sent, and an
+incoming note is neither shown nor spoken while the lock is closed (the Mac only says one is waiting). A
+message that looks like it contains a key or password is refused. Notes typed on the phone are shown to you
+and handed to the model only as quoted content, never as instructions.
+
+**iPad and other devices: the plan.** An iPad already works as a paired device: open the phone app's address
+in Safari on the iPad, pair it, add it to the Home Screen and turn on notifications; it then appears in the
+list and can be messaged. A second Mac would need Jarvis running there with its own pairing route, which is
+not built. A native companion app (for background presence, or richer messages than a notification) is the
+same Xcode project as the fallback above and is not built either.
 
 ## Voice ID: checking it is you
 

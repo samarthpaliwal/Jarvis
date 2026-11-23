@@ -53,6 +53,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var faceWatcher: FaceWatcher!
     public private(set) var faceStore: FaceTemplateStore!
     public private(set) var ownerLock: OwnerLock!
+    public private(set) var devices: DeviceHub!
     private var faceEnrollmentPending = false
     private var enrollmentPending = false
     public private(set) var glasses: PushedFrameSource!
@@ -249,8 +250,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let faceModel = LazySFaceEmbedder()
         let store = faceStore!
         faceWatcher = FaceWatcher(camera: faceCamera, embedder: { try faceModel.get() }, template: { try store.load() })
-        ownerLock = OwnerLock(watcher: faceWatcher, settings: { [config] in config!.profile.face?.lock ?? OwnerLock.Settings() },
-                              isEnrolled: { store.exists })
+        ownerLock = OwnerLock(watcher: faceWatcher, settings: { [config] in
+            var s = config!.profile.face?.lock ?? OwnerLock.Settings()
+            s.phoneRequired = config!.profile.phone?.required ?? false
+            return s
+        }, isEnrolled: { store.exists })
+        // The second check: is the chosen phone near (Bluetooth, listen-only). Nil until a phone is chosen.
+        ownerLock.phone = { [radar] in radar.phoneID == nil ? nil : radar.check }
+        radar.apply((config.profile.phone ?? PhoneConfig()).tracker)
+        if config.profile.phone?.required ?? false, radar.phoneID != nil, !radar.enabled { radar.enabled = true }
         dispatcher.ownerGate = { [weak self] tool, fromPhone in await self?.ownerLock.refusal(tool: tool, fromPhone: fromPhone) }
         JarvisLog.info("Owner lock: " + (!SFaceEmbedder.isInstalled ? "face model not installed (scripts/setup-faceid.sh)"
                                          : !store.exists ? "no face enrolled" : ownerLock.isActive ? "on" : "face enrolled, lock off"))
@@ -276,7 +284,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 isEnrolled: { store.exists }, modelInstalled: { SFaceEmbedder.isInstalled },
                 startEnrollment: { [weak self] in self?.startFaceEnrollment() },
                 forget: { [weak self] in try self?.forgetFace() },
-                setEnabled: { [config] in try config!.save(faceLockEnabled: $0) })),
+                setEnabled: { [config] in try config!.save(faceLockEnabled: $0) },
+                setPhoneRequired: { [weak self] on in
+                    guard let self, self.radar.phoneID != nil else { throw FaceError.notEnrolled }
+                    try self.config.save(phoneRequired: on)
+                    if on, !self.radar.enabled { self.radar.enabled = true }
+                })),
             VoiceIDTool(verifier: voiceID, lastCheck: { [weak self] in self?.conversation?.lastVoiceCheck },
                         startEnrollment: { [weak self] in self?.startVoiceEnrollment() }),
         ])
@@ -314,7 +327,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // the phone do not switch it on: nobody is sitting at the Mac.
         conversation.$state.map { $0 != .idle }.removeDuplicates().sink { [weak self] talking in
             guard let self else { return }
-            if talking, self.ownerLock.isActive, !self.conversation.isRemoteTurn {
+            if talking, self.ownerLock.faceActive, !self.conversation.isRemoteTurn {
                 let s = self.config.profile.face?.presence ?? OwnerPresence.Settings()
                 self.faceWatcher.settings = { s }
                 self.faceWatcher.begin("chat")
@@ -329,7 +342,48 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                               makeTranscriber: { TranscriberFactory.make(locale: speechLocale) })
         checkIns = PresenceCheckIns(push: PushStore(), modes: modes, notch: notch)
         remoteBackend.checkIns = checkIns
-        remote = RemoteAccess(config: config, tokens: RemoteTokenStore(), backend: remoteBackend)
+        let tokenStore = RemoteTokenStore()
+        // The device layer: email, this Mac, and every paired phone or iPad, all behind the owner lock.
+        devices = DeviceHub()
+        devices.access = { [weak self] in
+            guard let self else { return .general }
+            return await self.ownerLock.access(fromPhone: RequestTrace.current?.source == "remote", wait: self.config.profile.face?.lock.decisionSeconds ?? 4).access
+        }
+        devices.accessAtMac = { [weak self] in
+            guard let self else { return .general }
+            return await self.ownerLock.access(fromPhone: false, wait: self.config.profile.face?.lock.decisionSeconds ?? 4).access
+        }
+        devices.register(EmailDevice(isConnected: { [gmail] in gmail!.isConnected }, unread: { [gmail] in
+            let list = try await gmail!.search("is:unread in:inbox", limit: 20)
+            return (list.count, list.first.map { $0.from.components(separatedBy: "<").first?.trimmingCharacters(in: CharacterSet(charactersIn: " \"")) ?? $0.from })
+        }))
+        devices.register(ThisMacDevice(describe: {
+            let b = SystemInfo.battery()
+            return "This Mac is awake" + (b.percent.map { ", battery \($0)%" } ?? "") + (b.onBattery ? ", on battery." : ", plugged in.")
+        }))
+        let pushStore = checkIns!.pushStore
+        devices.dynamicDevices = { [radar] in
+            let subscribed = Set(pushStore.devices)
+            return tokenStore.all.map { token in
+                // The radar follows one phone; say where it is only for a device that looks like that phone.
+                let isRadarPhone = radar.phoneID != nil && token.name.localizedCaseInsensitiveContains("iphone")
+                return PairedDevice(name: token.name, lastUsed: token.lastUsed, notificationsOn: subscribed.contains(token.name),
+                                    nearby: isRadarPhone ? radar.check.why : nil,
+                                    push: { text in await pushStore.notify(title: "From your Mac", body: text, tag: "mac-note", onlyDevice: token.name) > 0 })
+            }
+        }
+        devices.onMessage = { [weak self] from, text in
+            guard let self else { return }
+            if let text {
+                self.notch.flash("Note from \(from): \(text)", seconds: 12)
+                self.conversation.announceWhenIdle("A note from your \(from.localizedCaseInsensitiveContains("ipad") ? "iPad" : "phone"): \(text)")
+            } else {
+                self.notch.flash("A note from \(from) is waiting. It shows once the owner lock is open.", seconds: 8)
+            }
+        }
+        remoteBackend.devices = devices
+        dispatcher.register(DevicesTool(hub: devices))
+        remote = RemoteAccess(config: config, tokens: tokenStore, backend: remoteBackend)
         remote.onPaired = { [weak self] name in self?.notch?.flash("Paired “\(name)” for remote access", seconds: 8) }
         remote.start()
         // A frozen main thread is not a crash, so launchd would never notice. This does.
@@ -472,6 +526,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!arrive" { self.spotter.openWindow(minutes: 10, reason: "debug"); return }
                                             if q == "!hud" { self.hud.show(scene: false); return }
                                             if q == "!prewarm" { self.brain.prewarmIfCold(force: true); return }   // silent: no HUD, no speech
+                                            if q.hasPrefix("!radar survey") {     // silent: which Apple devices Bluetooth can hear, to jarvis.log
+                                                Task { @MainActor in
+                                                    let rows = await self.radar.runSurvey(seconds: Double(q.split(separator: " ").last ?? "") ?? 20)
+                                                    JarvisLog.info("Radar survey: Bluetooth \(self.radar.bluetoothState), \(rows.count) Apple device(s)")
+                                                    for r in rows.prefix(25) {
+                                                        JarvisLog.info(String(format: "Radar survey: %@ name=%@ n=%d rssi=%.0f types=%@", String(r.id.uuidString.prefix(8)), r.name ?? "-", r.count, r.meanRSSI,
+                                                                              r.types.sorted().map { String(format: "%02X", $0) }.joined(separator: ",")))
+                                                    }
+                                                }
+                                                return
+                                            }
                                             if q.hasPrefix("!camera") { self.cameraDebug(q); return }               // drives the camera without a model turn
                                             if q == "!voiceid enroll" { self.startVoiceEnrollment(); return }
                                             if q == "!remote pair" {        // testing: a pairing code, left in the (tool-denylisted) remote folder instead of on screen
@@ -575,25 +640,31 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         notch?.flash(note, seconds: 6)
     }
 
-    /// One sentence on the owner lock for "is the lock on?" and the menu.
+    /// A few sentences on the owner lock for "is the lock on?" and the menu.
     public func ownerLockStatus() -> String {
-        guard SFaceEmbedder.isInstalled else { return "Face recognition is not installed (scripts/setup-faceid.sh)." }
-        guard faceStore.exists else { return "No face is enrolled, so the owner lock is off. Say \"set up face recognition\" to turn it on." }
-        guard ownerLock.isActive else { return "A face is enrolled but the owner lock is switched off." }
+        guard ownerLock.isActive else {
+            if !SFaceEmbedder.isInstalled { return "The owner lock is off. Face recognition is not installed (scripts/setup-faceid.sh)." }
+            if !faceStore.exists { return "The owner lock is off: no face is enrolled. Say \"set up face recognition\" to turn it on." }
+            return "A face is enrolled but the owner lock is switched off."
+        }
         if ownerLock.overrideActive, let until = ownerLock.overrideUntil {
             return "The owner lock is on and open by Touch ID until \(DateFormatter.localizedString(from: until, dateStyle: .none, timeStyle: .short))."
         }
-        let v = faceWatcher.verdict
-        let seen: String
-        switch v.state {
-        case .idle: seen = "the camera is off until the next request"
-        case .checking: seen = "checking (\(v.detail))"
-        case .owner: seen = "it sees you"
-        case .unknown: seen = "it sees someone it does not recognise"
-        case .noFace: seen = v.ownerPresent ? "no face in view, still open for a moment" : "no face in view"
-        case .error: seen = "the check failed (\(v.detail)), so it is locked"
+        var parts: [String] = []
+        if ownerLock.faceActive {
+            let v = faceWatcher.verdict
+            let seen = v.state == .idle ? "the camera is off until the next request" : OwnerLock.describe(v)
+            parts.append("Face: \(seen)" + (v.score.map { String(format: " (score %.2f, needs %.2f)", $0, self.config.profile.face?.presence.threshold ?? 0.45) } ?? "") + ".")
+        } else {
+            parts.append("Face: not required.")
         }
-        return "The owner lock is on: \(seen)." + (v.score.map { String(format: " Last score %.2f; it needs %.2f.", $0, self.config.profile.face?.presence.threshold ?? 0.45) } ?? "")
+        if ownerLock.phoneActive {
+            let c = radar.check
+            parts.append("Phone: \(c.why)" + (radar.tracker.smoothed.map { " (signal \(Int($0)))" } ?? "") + ".")
+        } else {
+            parts.append("Phone: not required.")
+        }
+        return "The owner lock is on. " + parts.joined(separator: " ")
     }
 
     /// Deletes the saved face and its key, and switches the lock off.

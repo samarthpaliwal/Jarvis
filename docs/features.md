@@ -625,3 +625,29 @@ explained in the comment there. State changes are logged to `~/Library/Logs/Jarv
 5. With the camera covered, say "unlock with Touch ID", touch the sensor, ask again: answers. Say "lock now".
 6. Open `~/Library/Logs/Jarvis/face.log` and check each step left a line.
 
+## Phone lock and connected devices
+
+The owner lock can also want your iPhone nearby. Setup: menu → Phone Radar → Set My Phone… (hold the phone
+against the Mac), then menu → Owner Lock → Also Require My Phone Nearby. How it recognises the phone, the
+levels, and the limits are in [privacy and security](privacy-and-security.md#owner-lock-your-phone-as-a-passive-key).
+
+| Say | What happens |
+| --- | --- |
+| "Require my phone for the lock" / "stop requiring my phone" | switches the phone check (off needs Touch ID) |
+| "Is the owner lock on?" | both checks, the signal strength, and why one failed |
+| "What devices are connected?" | email, this Mac, each paired phone or iPad |
+| "Send 'leave at five' to my phone" | a notification on the paired phone |
+| "Any notes from my phone?" | notes sent from the phone app (••• → Send a note to the Mac) |
+
+**Manual test checklist**
+1. Set My Phone, then switch on "Also Require My Phone Nearby". Menu → Owner Lock should show "Phone: … is near".
+2. With the phone beside you, ask "do I have unread email?": answered.
+3. Turn the phone's Bluetooth off (Settings, not Control Centre) or carry it two rooms away, wait about a
+   minute and a half, and ask again: refused, naming the phone check. Ask "what's on my calendar?": still
+   answered (one check of two).
+4. Bring the phone back: within a few seconds email works again.
+5. Turn the Mac's Bluetooth off and ask for email: refused, saying Bluetooth is not available. Turn it back on.
+6. With the phone app paired and notifications on, say "send 'testing' to my phone": a notification arrives.
+7. In the phone app, ••• → Send a note to the Mac: it shows in the notch and is read out. Cover the camera,
+   wait a minute, send another: the Mac only says a note is waiting.
+

@@ -421,15 +421,32 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             sub.addItem(.separator())
             let toggle = ClosureMenuItem(title: "Require My Face for Personal Data", symbol: "person.badge.shield.checkmark") { [notch] in
                 Task { @MainActor in
-                    let turnOn = !lock.settings().enabled
+                    let turnOn = !lock.settings().faceRequired
                     if !turnOn, !(await lock.confirmOwner("turn Jarvis's owner lock off")) { notch.flash("Touch ID was not confirmed. The lock stays on.", seconds: 4); return }
                     do { try app.config.save(faceLockEnabled: turnOn); notch.flash("Owner lock \(turnOn ? "on" : "off").", seconds: 3) }
                     catch { notch.flash("Could not save that: \(error.localizedDescription)", seconds: 5) }
                 }
             }
-            toggle.state = lock.settings().enabled ? .on : .off
+            toggle.state = lock.settings().faceRequired ? .on : .off
             toggle.isEnabled = enrolled
             sub.addItem(toggle)
+            if let radar {
+                let phone = ClosureMenuItem(title: "Also Require My Phone Nearby", symbol: "iphone.radiowaves.left.and.right") { [notch] in
+                    Task { @MainActor in
+                        let turnOn = !lock.settings().phoneRequired
+                        if !turnOn, !(await lock.confirmOwner("stop Jarvis's owner lock from needing your phone")) { notch.flash("Touch ID was not confirmed. Nothing changed.", seconds: 4); return }
+                        do {
+                            try app.config.save(phoneRequired: turnOn)
+                            if turnOn, !radar.enabled { radar.enabled = true }
+                            notch.flash(turnOn ? "The lock now also needs \(radar.phoneName) nearby." : "The lock no longer needs your phone.", seconds: 4)
+                        } catch { notch.flash("Could not save that: \(error.localizedDescription)", seconds: 5) }
+                    }
+                }
+                phone.state = lock.settings().phoneRequired ? .on : .off
+                phone.isEnabled = radar.phoneID != nil
+                if radar.phoneID == nil { phone.title = "Also Require My Phone Nearby (set your phone under Phone Radar first)" }
+                sub.addItem(phone)
+            }
             let setup = ClosureMenuItem(title: enrolled ? "Redo Face Setup…" : "Set Up Face Recognition…", symbol: "faceid") { [notch] in
                 Task { @MainActor in
                     guard SFaceEmbedder.isInstalled else { notch.flash("The face model is not installed. Run scripts/setup-faceid.sh.", seconds: 6); return }
@@ -831,7 +848,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             MainActor.assumeIsolated {
                 let intro = NSAlert()
                 intro.messageText = "Set your phone"
-                intro.informativeText = "Unlock your iPhone, make sure its Bluetooth is on, and hold it right against this Mac. Then click Start. Jarvis listens for six seconds and picks the closest Apple device. macOS may ask to let Jarvis use Bluetooth the first time."
+                intro.informativeText = "Unlock your iPhone, make sure its Bluetooth is on, and hold it right against this Mac. Then click Start. Jarvis listens for six seconds and picks your iPhone if macOS can name it (it can when the phone is signed in to your Apple account), otherwise the closest Apple device. macOS may ask to let Jarvis use Bluetooth the first time."
                 intro.addButton(withTitle: "Start")
                 intro.addButton(withTitle: "Cancel")
                 NSApp.activate(ignoringOtherApps: true)

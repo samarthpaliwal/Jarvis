@@ -152,8 +152,9 @@ public final class PushStore: @unchecked Sendable {
     /// Sends one note to every subscribed phone. Returns how many took it. A phone that has turned
     /// notifications off (404/410) is forgotten.
     @discardableResult
-    public func notify(title: String, body: String, tag: String) async -> Int {
-        let (subs, key) = lock.withLock { (file.subscriptions, self.key) }
+    public func notify(title: String, body: String, tag: String, onlyDevice: String? = nil) async -> Int {
+        let (all, key) = lock.withLock { (file.subscriptions, self.key) }
+        let subs = all.filter { onlyDevice == nil || $0.device == onlyDevice }
         guard let message = try? JSONSerialization.data(withJSONObject: ["title": title, "body": body, "tag": tag]) else { return 0 }
         var delivered = 0
         for sub in subs {

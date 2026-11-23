@@ -284,5 +284,14 @@
     "framesPerSecond": 6,
     "decisionSeconds": 4,
     "overrideMinutes": 10
+  },
+  "phone": {
+    "_comment": "The phone as a passive key for the owner lock. required: the lock also wants your phone nearby (only works once a phone is chosen in menu > Phone Radar > Set My Phone). nearRSSI: smoothed Bluetooth signal at or above this counts as near (about the same room; closer to 0 is stricter). awayRSSI: at or below this for graceSeconds counts as away; it is always kept at least 6 below nearRSSI so the lock does not flicker. graceSeconds: how long the signal must stay weak before locking. silenceSeconds: not heard at all for this long also locks. smoothingSeconds: the signal is averaged over about this long.",
+    "required": false,
+    "nearRSSI": -72,
+    "awayRSSI": -88,
+    "graceSeconds": 45,
+    "silenceSeconds": 90,
+    "smoothingSeconds": 4
   }
 }

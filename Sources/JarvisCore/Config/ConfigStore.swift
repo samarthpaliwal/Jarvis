@@ -62,6 +62,15 @@ public final class ConfigStore: ObservableObject {
         JarvisLog.info("Owner lock \(faceLockEnabled ? "on" : "off")")
     }
 
+    /// Switches "the phone must be nearby" on or off in profile.json.
+    public func save(phoneRequired: Bool) throws {
+        try saveProfileValue(phoneRequired, section: "phone", key: "required")
+        var phone = profile.phone ?? PhoneConfig()
+        phone.required = phoneRequired
+        profile.phone = phone
+        JarvisLog.info("Owner lock: phone \(phoneRequired ? "required" : "not required")")
+    }
+
     /// Rewrites one value in profile.json; every other key and comment in the file stays as it was.
     /// A file that is missing or cannot be read is never replaced with a stub.
     private func saveProfileValue(_ value: Any, section: String, key: String) throws {

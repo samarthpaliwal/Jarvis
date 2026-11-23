@@ -16,7 +16,7 @@ enforced in code.
 
 - **Hands-free.** On-device wake word, on-device speech recognition, a natural on-device voice (Kokoro).
   Follow-up questions without repeating the wake word.
-- **Gets things done.** 49 tools behind one dispatcher: calendar and reminders, Gmail, Notion, Spotify and
+- **Gets things done.** 50 tools behind one dispatcher: calendar and reminders, Gmail, Notion, Spotify and
   Apple Music, files, apps, the screen and the camera, web search. Multi-step requests chain tools.
 - **Asks before anything risky.** Sending, deleting, shell commands and anything involving money need a
   spoken "yes" or a tap, in your voice. Keys, passwords, `~/.ssh` and anything on the denylist are refused
@@ -48,7 +48,7 @@ flowchart LR
         intent --> actions["4 · Actions<br/>ToolDispatcher"]
         actions --> guard{"Tier · denylist<br/>approval"}
         voiceid --> guard
-        guard --> tools["49 tools"]
+        guard --> tools["50 tools"]
         tools --> intent
         intent --> tts["5 · Text to speech<br/>Kokoro"]
     end
@@ -95,12 +95,60 @@ Optional, each one command or one menu item:
 |---|---|
 | A natural on-device voice | `scripts/setup-kokoro.sh` |
 | Voice ID | `scripts/setup-voiceid.sh`, then menu → Voice ID → Set Up |
-| Owner lock (face) | `scripts/setup-faceid.sh`, then menu → Owner Lock → Set Up Face Recognition, or say "set up face recognition" |
+| Owner lock | see [Owner lock setup](#owner-lock-setup) below |
 | Keep it running, start at login | `scripts/install-agent.sh` |
 | Gmail, Notion, Spotify | menu → Integrations |
 | Your phone | [docs/remote-access.md](docs/remote-access.md) |
 
 Full instructions: [docs/setup.md](docs/setup.md).
+
+## Owner lock setup
+
+The owner lock keeps your email, files and other personal data closed unless you are at the Mac. It has two
+checks, each optional: your face (camera) and your phone (Bluetooth). Everything runs on the Mac.
+
+**1. Enroll your face**
+1. `scripts/setup-faceid.sh` (downloads the 38.7 MB face model once).
+2. Say "Hey Jarvis, set up face recognition", or menu → Owner Lock → Set Up Face Recognition….
+3. Touch the Touch ID sensor, then follow the five spoken steps (straight, left, right, chin up, chin down).
+
+**2. Choose your phone**
+1. Sign the iPhone in to the same Apple account as the Mac and keep its Bluetooth on. Nothing is installed on it.
+2. Menu → Phone Radar → Set My Phone…, hold the phone against the Mac, click Start, and confirm the name.
+3. Menu → Owner Lock → Also Require My Phone Nearby (or say "require my phone for the lock").
+
+**3. Pair the phone app** (for messages between Mac and phone): [docs/remote-access.md](docs/remote-access.md),
+then in the phone app ••• → Turn on notifications.
+
+| With | You get |
+| --- | --- |
+| Face and phone both confirmed | everything |
+| Only one of the two | calendar, reminders, notes, contacts, memory, device status |
+| Neither, or an unknown face at the Mac | general questions, web search, music, lights, timers, weather |
+
+Touch ID opens the lock for ten minutes if a sensor fails. Limits and the threat model:
+[docs/privacy-and-security.md](docs/privacy-and-security.md#owner-lock-your-face-opens-your-data).
+All settings are in `~/Library/Application Support/Jarvis/config/profile.json`, each with a comment.
+
+### Voice commands added by the lock, speech and device features
+
+| Say (after "Hey Jarvis") | What happens |
+| --- | --- |
+| "Talk faster" / "talk slower" | speech speed up or down 10%, saved |
+| "Talk at normal speed" | back to the default speed |
+| "Set up face recognition" | Touch ID, then the guided face setup |
+| "Is the owner lock on?" / "Who do you see?" | each check's state, the last score, why one failed |
+| "Unlock with Touch ID" | opens the lock for ten minutes |
+| "Lock now" | closes it again |
+| "Turn the owner lock off" / "on" | switches the face check (off needs Touch ID) |
+| "Require my phone for the lock" / "stop requiring my phone" | switches the phone check (off needs Touch ID) |
+| "Forget my face" | Touch ID, then deletes the saved face |
+| "What devices are connected?" | email, this Mac, each paired phone or iPad |
+| "Do I have unread email?" (device status) | connected or not, and how many unread |
+| "Send 'leave at five' to my phone" | a notification on the paired phone |
+| "Any notes from my phone?" | notes sent from the phone app to the Mac |
+
+Everything else Jarvis understands is listed in [docs/features.md](docs/features.md).
 
 ## Tests
 

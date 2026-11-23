@@ -442,7 +442,7 @@ final class OwnerLockTests: XCTestCase {
         var s = OwnerPresence.Settings(); s.requireLiveness = false
         let e = embedder!
         let w = FaceWatcher(camera: camera, detector: detector, embedder: { e }, template: { ownerTemplate }, settings: { s }, log: FaceLog(url: logURL))
-        return OwnerLock(watcher: w, settings: { [unowned self] in var s = OwnerLock.Settings(); s.enabled = self.enabled; s.decisionSeconds = 1; return s },
+        return OwnerLock(watcher: w, settings: { [unowned self] in var s = OwnerLock.Settings(); s.faceRequired = self.enabled; s.decisionSeconds = 1; return s },
                          isEnrolled: { [unowned self] in self.enrolled }, authenticate: { [unowned self] _ in self.touchID },
                          log: FaceLog(url: logURL), now: { [unowned self] in self.clock })
     }

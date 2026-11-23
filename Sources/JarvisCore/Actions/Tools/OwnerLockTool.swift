@@ -4,12 +4,12 @@ import Foundation
 /// itself, so this tool is safe to leave reachable while everything personal is closed.
 public final class OwnerLockTool: JarvisTool {
     public let name = "owner_lock"
-    public let description = "The owner lock keeps Sam's email, calendar, files, notes and memory closed unless the camera sees Sam's face. status: is it on, who the camera sees, and why a check failed. unlock: open it for a few minutes with Touch ID (when Sam says 'unlock with Touch ID' or the camera is not working). lock: close it now. enroll: start the guided face setup (Touch ID first; it begins after you finish speaking). forget: delete the saved face and turn the lock off (Touch ID first). on / off: switch the lock (off needs Touch ID). Only when Sam asks."
+    public let description = "The owner lock keeps Sam's email, calendar, files, notes and memory closed unless the camera sees Sam's face. status: is it on, who the camera sees, and why a check failed. unlock: open it for a few minutes with Touch ID (when Sam says 'unlock with Touch ID' or the camera is not working). lock: close it now. enroll: start the guided face setup (Touch ID first; it begins after you finish speaking). forget: delete the saved face and turn the lock off (Touch ID first). on / off: switch the face check (off needs Touch ID). phone_on / phone_off: also require Sam's phone to be nearby, or stop requiring it (off needs Touch ID). With both checks on, both must pass for email, files and anything that sends or deletes; with one, only the calendar, reminders, notes and memory work. Only when Sam asks."
     public let tier = Tier.free
     public let userOnly = true
     public let inputSchema: JSONObject = [
         "type": "object",
-        "properties": ["action": ["type": "string", "enum": ["status", "unlock", "lock", "enroll", "forget", "on", "off"]]],
+        "properties": ["action": ["type": "string", "enum": ["status", "unlock", "lock", "enroll", "forget", "on", "off", "phone_on", "phone_off"]]],
         "required": ["action"], "additionalProperties": false,
     ]
 
@@ -20,11 +20,14 @@ public final class OwnerLockTool: JarvisTool {
         public var startEnrollment: @MainActor () -> Void
         public var forget: @MainActor () throws -> Void
         public var setEnabled: @MainActor (Bool) throws -> Void
+        /// Nil when no phone has been chosen yet; otherwise switches the phone check.
+        public var setPhoneRequired: (@MainActor (Bool) throws -> Void)? = nil
         public init(status: @escaping @MainActor () -> String, isEnrolled: @escaping @MainActor () -> Bool,
                     modelInstalled: @escaping @MainActor () -> Bool, startEnrollment: @escaping @MainActor () -> Void,
-                    forget: @escaping @MainActor () throws -> Void, setEnabled: @escaping @MainActor (Bool) throws -> Void) {
+                    forget: @escaping @MainActor () throws -> Void, setEnabled: @escaping @MainActor (Bool) throws -> Void,
+                    setPhoneRequired: (@MainActor (Bool) throws -> Void)? = nil) {
             self.status = status; self.isEnrolled = isEnrolled; self.modelInstalled = modelInstalled
-            self.startEnrollment = startEnrollment; self.forget = forget; self.setEnabled = setEnabled
+            self.startEnrollment = startEnrollment; self.forget = forget; self.setEnabled = setEnabled; self.setPhoneRequired = setPhoneRequired
         }
     }
     private let lock: OwnerLock
@@ -48,7 +51,7 @@ public final class OwnerLockTool: JarvisTool {
             return ToolResult("Unlocked with Touch ID for \(Int(lock.settings().overrideMinutes)) minutes.", summary: "Owner lock opened with Touch ID")
         case "lock":
             lock.lockNow()
-            return ToolResult(lock.isActive ? "Locked. Personal features need your face again." : "The owner lock is not on yet; set up face recognition first.",
+            return ToolResult(lock.isActive ? "Locked. Personal features need the checks again." : "The owner lock is not on yet; set up face recognition first.",
                               summary: "Owner lock closed")
         case "enroll":
             guard await hooks.modelInstalled() else { return .error("The face model is not installed. Run scripts/setup-faceid.sh, then restart Jarvis.") }
@@ -70,8 +73,17 @@ public final class OwnerLockTool: JarvisTool {
             guard await lock.confirmOwner("turn Jarvis's owner lock off") else { return .error("Touch ID was not confirmed. The lock stays on.") }
             try await hooks.setEnabled(false)
             return ToolResult("The owner lock is off. Everything works without a face check until you turn it back on.", summary: "Owner lock off")
+        case "phone_on":
+            guard let set = hooks.setPhoneRequired else { return .error("No phone has been chosen yet. Sam picks it once in the menu: Phone Radar → Set My Phone.") }
+            try set(true)
+            return ToolResult("The owner lock now also needs the phone nearby.", summary: "Phone check on")
+        case "phone_off":
+            guard let set = hooks.setPhoneRequired else { return ToolResult("The phone check is not on.") }
+            guard await lock.confirmOwner("stop Jarvis's owner lock from needing your phone") else { return .error("Touch ID was not confirmed. Nothing changed.") }
+            try set(false)
+            return ToolResult("The owner lock no longer needs the phone.", summary: "Phone check off")
         default:
-            return .error("action must be status, unlock, lock, enroll, forget, on or off")
+            return .error("action must be status, unlock, lock, enroll, forget, on, off, phone_on or phone_off")
         }
     }
 }

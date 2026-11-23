@@ -1,6 +1,6 @@
 // Keeps the app's own files so it opens instantly and can say "can't reach your Mac" when it can't.
 // It never stores or answers API calls: those always go to the Mac.
-const CACHE = "jarvis-shell-v2";
+const CACHE = "jarvis-shell-v3";
 const SHELL = ["./", "app.css", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {

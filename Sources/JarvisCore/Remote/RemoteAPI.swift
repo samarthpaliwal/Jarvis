@@ -29,6 +29,8 @@ public protocol RemoteBackend: Sendable {
     func subscribe(_ subscription: PushSubscription) async -> Bool
     func checkIn() async -> CheckInView?
     func answerCheckIn(_ id: UUID, mode: String?, people: Bool?) async -> String?
+    /// A short note from a paired device to the Mac. Returns what to tell the sender, or nil when notes are not available.
+    func note(_ text: String, from device: String) async -> String?
 }
 
 public extension RemoteBackend {
@@ -36,6 +38,7 @@ public extension RemoteBackend {
     func subscribe(_ subscription: PushSubscription) async -> Bool { false }
     func checkIn() async -> CheckInView? { nil }
     func answerCheckIn(_ id: UUID, mode: String?, people: Bool?) async -> String? { nil }
+    func note(_ text: String, from device: String) async -> String? { nil }
 }
 
 /// The remote API: three routes, a token on every one.
@@ -159,7 +162,8 @@ public final class RemoteAPI: @unchecked Sendable {
                 response = .json(200, ["question": ["id": q.id, "text": q.text, "modes": q.modes.map { ["id": $0[0], "name": $0[1]] }, "current": q.current] as [String: Any]])
             } else { response = .json(200, ["question": NSNull()]) }
         case ("POST", "/v1/checkin"): response = await answerCheckIn(request)
-        case (_, "/v1/status"), (_, "/v1/ask"), (_, "/v1/approve"), (_, "/v1/push/key"), (_, "/v1/push/subscribe"), (_, "/v1/checkin"): response = .error(405, "method_not_allowed", "That path does not take \(request.method).")
+        case ("POST", "/v1/message"): response = await note(request, device: device)
+        case (_, "/v1/status"), (_, "/v1/ask"), (_, "/v1/approve"), (_, "/v1/push/key"), (_, "/v1/push/subscribe"), (_, "/v1/checkin"), (_, "/v1/message"): response = .error(405, "method_not_allowed", "That path does not take \(request.method).")
         default: response = .error(404, "not_found", "There is nothing at that path.")
         }
         JarvisLog.info("Remote: \(request.method) \(request.path.prefix(40)) from \(ip) (\(device.name)) → \(response.status) in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
@@ -195,6 +199,16 @@ public final class RemoteAPI: @unchecked Sendable {
             return .error(400, "bad_subscription", "That notification address is not one Jarvis can use.")
         }
         return .json(200, ["ok": true])
+    }
+
+    /// A note for the Mac's screen. It is shown, never run: nothing here reaches the model or a tool.
+    private func note(_ request: HTTPRequest, device: RemoteToken) async -> HTTPResponse {
+        guard request.body.count <= 2048, let json = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+              let text = json["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .error(400, "bad_request", "A short text is required.")
+        }
+        guard let reply = await backend.note(text, from: device.name) else { return .error(404, "not_available", "Notes are not available.") }
+        return .json(200, ["ok": true, "reply": reply])
     }
 
     private func answerCheckIn(_ request: HTTPRequest) async -> HTTPResponse {

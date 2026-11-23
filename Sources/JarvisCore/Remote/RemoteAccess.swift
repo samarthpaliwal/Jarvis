@@ -199,6 +199,9 @@ public final class LiveRemoteBackend: RemoteBackend, @unchecked Sendable {
     private let makeTranscriber: @Sendable () -> Transcriber
     /// Set once the check-in service exists. Without it the notification routes answer "not available".
     public var checkIns: PresenceCheckIns?
+    /// Set once the device layer exists. Without it the note route answers "not available".
+    public var devices: DeviceHub?
+    public func note(_ text: String, from device: String) async -> String? { await devices?.receive(from: device, text: text) }
 
     @MainActor
     public init(conversation: ConversationController, config: ConfigStore, modes: ModeManager, router: SpeechRouter,

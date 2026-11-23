@@ -1,5 +1,16 @@
 # Changelog
 
+### 0.18.0 — Phone as a passive key, and a device layer (2026-11-23)
+- **Phone proximity check** for the owner lock. The iPhone is recognised over Bluetooth by the identity macOS
+  resolves for the owner's own devices (same Apple account): no companion app, listen-only. Signal averaged
+  over 4 s, near at -72, away at -88 for 45 s (or silent 90 s), all in `profile.json` → `phone`.
+- **Two checks, three levels:** face and phone → everything; one of them → calendar, reminders, notes,
+  contacts, memory; none, or an unknown face → general only. A refusal names the check that failed.
+- **Fails closed:** Bluetooth off or not allowed counts as "phone not near".
+- **Device layer** (`devices`): email status, this Mac, and each paired phone or iPad behind one interface.
+  "Send … to my phone" arrives as a notification; the phone app can send a note to the Mac
+  (`POST /v1/message`). Notes are held, unread and unspoken, while the lock is closed.
+
 ### 0.17.0 — Owner lock: face recognition (2026-11-23)
 - **Personal features only open for the owner's face.** Email, calendar, files, notes, contacts, memory,
   briefings, shell and computer control are refused unless the camera sees the enrolled face. Music, lights,

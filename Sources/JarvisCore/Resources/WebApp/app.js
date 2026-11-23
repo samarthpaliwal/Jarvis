@@ -525,6 +525,16 @@ if (typeof document !== "undefined") (() => {
       state === "unsupported" ? "For notifications, add Jarvis to the Home Screen and open it from there." : "";
   }
 
+  // A short note that shows up on the Mac's screen. It is shown there, not acted on.
+  $("note").addEventListener("click", async () => {
+    const text = (window.prompt("Note for the Mac (up to 280 characters)") || "").trim();
+    if (!text) return;
+    try {
+      const { reply } = await api("v1/message", { method: "POST", body: JSON.stringify({ text: text.slice(0, 280) }), type: "application/json" });
+      $("note-line").textContent = reply || "Sent.";
+    } catch (e) { $("note-line").textContent = "Couldn't send it: " + (e.message || e); }
+  });
+
   // Must run from a tap: phones only show the permission question in answer to one.
   $("notify").addEventListener("click", async () => {
     try {

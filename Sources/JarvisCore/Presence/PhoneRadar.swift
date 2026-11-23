@@ -16,6 +16,8 @@ public struct PresenceTracker: Equatable, Sendable {
         public var lostSeconds: TimeInterval = 90
         /// Strong readings needed in a row before "near", so one stray packet does not count.
         public var nearReadings = 2
+        /// The signal is averaged over about this many seconds, so one odd reading moves it very little.
+        public var smoothingSeconds: TimeInterval = 4
         public init() {}
     }
 
@@ -34,7 +36,10 @@ public struct PresenceTracker: Equatable, Sendable {
         guard rssi < 0, rssi > -110 else { return nil }
         // A long silence makes the old average meaningless.
         if let seen = lastSeen, now.timeIntervalSince(seen) > 20 { smoothed = nil }
-        smoothed = smoothed.map { $0 * 0.7 + rssi * 0.3 } ?? rssi
+        // Time-based averaging: a reading counts for more the longer it has been since the last one.
+        let gap = lastSeen.map { max(0.05, now.timeIntervalSince($0)) } ?? 0
+        let weight = settings.smoothingSeconds > 0 ? 1 - exp(-gap / settings.smoothingSeconds) : 1
+        smoothed = smoothed.map { $0 * (1 - weight) + rssi * weight } ?? rssi
         lastSeen = now
         guard let s = smoothed else { return nil }
         if s >= settings.nearRSSI {
@@ -83,6 +88,8 @@ public struct BluetoothSighting: Equatable, Sendable {
     public var rssi: Double
     public var isApple: Bool
     public var at: Date
+    /// The first Apple message type in the advertisement (0x10 "nearby", 0x0C handoff, 0x12 Find My…).
+    public var appleType: UInt8? = nil
 }
 
 /// Listens for Bluetooth advertisements. It never connects to anything and never sends anything.
@@ -123,7 +130,8 @@ final class BluetoothScanner: NSObject, CBCentralManagerDelegate {
         // Apple's company number, 0x004C, leads every iPhone, Watch, and AirPods advertisement.
         let apple = (maker?.count ?? 0) >= 2 && maker?[0] == 0x4C && maker?[1] == 0x00
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String
-        onSighting?(BluetoothSighting(id: peripheral.identifier, name: name, rssi: RSSI.doubleValue, isApple: apple, at: Date()))
+        onSighting?(BluetoothSighting(id: peripheral.identifier, name: name, rssi: RSSI.doubleValue, isApple: apple, at: Date(),
+                                      appleType: apple && (maker?.count ?? 0) > 2 ? maker?[2] : nil))
     }
 }
 
@@ -156,6 +164,30 @@ public final class PhoneRadar: ObservableObject {
 
     public var bluetoothState: String { scanner.stateText }
 
+    /// What the owner lock needs to know: is the chosen phone near right now, and if not, why not.
+    /// Anything other than a clear "near" counts as not near, including Bluetooth being off.
+    public struct Check: Equatable, Sendable {
+        public var near: Bool
+        public var why: String
+        public init(near: Bool, why: String) { self.near = near; self.why = why }
+    }
+    public var check: Check {
+        guard phoneID != nil else { return Check(near: false, why: "no phone has been chosen (menu → Phone Radar → Set My Phone)") }
+        guard enabled else { return Check(near: false, why: "the phone radar is switched off") }
+        guard scanner.stateText == "listening" else { return Check(near: false, why: "Bluetooth is not available (\(scanner.stateText))") }
+        switch tracker.state {
+        case .near: return Check(near: true, why: "\(phoneName) is near")
+        case .away: return Check(near: false, why: "\(phoneName) is not nearby")
+        case .unknown: return Check(near: false, why: "\(phoneName) has not been heard yet")
+        }
+    }
+
+    /// Thresholds and timings from the settings file.
+    public func apply(_ settings: PresenceTracker.Settings) {
+        guard tracker.settings != settings else { return }
+        tracker.settings = settings
+    }
+
     public var statusLine: String {
         guard enabled else { return "Phone radar: off" }
         guard phoneID != nil else { return "Phone radar: no phone chosen yet" }
@@ -182,6 +214,14 @@ public final class PhoneRadar: ObservableObject {
 
     private func heard(_ s: BluetoothSighting) {
         nearby[s.id] = s
+        if survey != nil, s.isApple, s.rssi < 0 {
+            var row = survey?[s.id] ?? SurveyRow(id: s.id, name: s.name, count: 0, meanRSSI: 0, types: [])
+            row.meanRSSI = (row.meanRSSI * Double(row.count) + s.rssi) / Double(row.count + 1)
+            row.count += 1
+            if let n = s.name { row.name = n }
+            if let t = s.appleType { row.types.insert(t) }
+            survey?[s.id] = row
+        }
         guard enabled, s.id == phoneID else { return }
         let before = tracker.state
         if let now = tracker.sighting(rssi: s.rssi, at: s.at) { changed(to: now, from: before) }
@@ -202,7 +242,11 @@ public final class PhoneRadar: ObservableObject {
 
     /// The strongest Apple device heard in the last few seconds: the phone, if it is held against the Mac.
     nonisolated public static func closest(_ sightings: [BluetoothSighting], now: Date, minimumRSSI: Double = -55) -> BluetoothSighting? {
-        sightings.filter { $0.isApple && now.timeIntervalSince($0.at) < 6 && $0.rssi >= minimumRSSI && $0.rssi < 0 }.max { $0.rssi < $1.rssi }
+        let close = sightings.filter { $0.isApple && now.timeIntervalSince($0.at) < 6 && $0.rssi >= minimumRSSI && $0.rssi < 0 }
+        // macOS names the owner's own devices (same Apple account). An iPhone it can name beats headphones
+        // or a watch that merely happen to be closer.
+        let phones = close.filter { $0.name?.localizedCaseInsensitiveContains("iPhone") ?? false }
+        return (phones.isEmpty ? close : phones).max { $0.rssi < $1.rssi }
     }
 
     /// Listen for a few seconds and hand back the closest Apple device.
@@ -215,6 +259,29 @@ public final class PhoneRadar: ObservableObject {
         let found = Self.closest(Array(nearby.values), now: Date())
         if !enabled { stop() }
         return found
+    }
+
+    /// One device heard during a survey.
+    public struct SurveyRow: Equatable, Sendable {
+        public var id: UUID
+        public var name: String?
+        public var count: Int
+        public var meanRSSI: Double
+        public var types: Set<UInt8>
+    }
+    private var survey: [UUID: SurveyRow]?
+
+    /// Listen for a while and report every Apple device heard: for working out how to recognise the phone.
+    public func runSurvey(seconds: Double) async -> [SurveyRow] {
+        choosing = true
+        survey = [:]
+        start()
+        try? await Task.sleep(for: .seconds(seconds))
+        choosing = false
+        let rows = (survey ?? [:]).values.sorted { $0.meanRSSI > $1.meanRSSI }
+        survey = nil
+        if !enabled { stop() }
+        return rows
     }
 
     public func choose(_ s: BluetoothSighting) {

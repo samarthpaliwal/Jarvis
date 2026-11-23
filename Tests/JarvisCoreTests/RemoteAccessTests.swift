@@ -196,6 +196,12 @@ final class FakeRemoteBackend: RemoteBackend, @unchecked Sendable {
         answered = "\(mode ?? "-") \(people.map(String.init) ?? "-")"
         return "Got it."
     }
+    var notes: [(text: String, from: String)] = []
+    var notesAvailable = true
+    func note(_ text: String, from device: String) async -> String? {
+        guard notesAvailable else { return nil }
+        notes.append((text, device)); return "Shown on the Mac."
+    }
     var asked: [(text: String, voice: VoiceCheck?)] = []
     var decided: [(id: UUID, approved: Bool)] = []
     var rendered: [String] = []
@@ -293,6 +299,21 @@ final class RemoteAPITests: XCTestCase {
         XCTAssertEqual(locked.status, 429)
         let other = await send(request("GET", "/v1/status"), ip: "100.64.0.2")
         XCTAssertEqual(other.status, 200, "the phone with the real token is not affected")
+    }
+
+    func testANoteFromThePhoneIsFiledUnderThePairedDevicesName() async {
+        let ok = await send(request("POST", "/v1/message", json: ["text": "Running late, back at six"]))
+        XCTAssertEqual(ok.status, 200)
+        XCTAssertEqual(backend.notes.first?.text, "Running late, back at six")
+        XCTAssertEqual(backend.notes.first?.from, "phone", "the name comes from the token, not from the request")
+        let empty = await send(request("POST", "/v1/message", json: ["text": "   "]))
+        XCTAssertEqual(empty.status, 400)
+        let noToken = await send(request("POST", "/v1/message", json: ["text": "hi"], token: "wrong"))
+        XCTAssertEqual(noToken.status, 401)
+        XCTAssertEqual(backend.notes.count, 1)
+        backend.notesAvailable = false
+        let off = await send(request("POST", "/v1/message", json: ["text": "hi"]))
+        XCTAssertEqual(off.status, 404)
     }
 
     func testStatus() async {

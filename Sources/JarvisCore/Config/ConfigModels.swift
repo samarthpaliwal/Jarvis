@@ -2,6 +2,44 @@ import Foundation
 
 // MARK: - profile.json
 
+/// The phone as a passive key for the owner lock. Missing values take the defaults below.
+public struct PhoneConfig: Codable, Equatable, Sendable {
+    /// The lock also wants the phone nearby. Only has an effect once a phone is chosen.
+    public var required = false
+    /// Smoothed signal at or above this is "near" (roughly the same room).
+    public var nearRSSI = -72.0
+    /// Smoothed signal at or below this for `graceSeconds` is "away". Kept apart from nearRSSI so it does not flicker.
+    public var awayRSSI = -88.0
+    /// How long the signal must stay weak before locking.
+    public var graceSeconds = 45.0
+    /// Not heard at all for this long also locks.
+    public var silenceSeconds = 90.0
+    /// The signal is averaged over about this many seconds.
+    public var smoothingSeconds = 4.0
+
+    public init() {}
+    private enum CodingKeys: String, CodingKey { case required, nearRSSI, awayRSSI, graceSeconds, silenceSeconds, smoothingSeconds }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        required = try c.decodeIfPresent(Bool.self, forKey: .required) ?? required
+        nearRSSI = try c.decodeIfPresent(Double.self, forKey: .nearRSSI) ?? nearRSSI
+        awayRSSI = try c.decodeIfPresent(Double.self, forKey: .awayRSSI) ?? awayRSSI
+        graceSeconds = try c.decodeIfPresent(Double.self, forKey: .graceSeconds) ?? graceSeconds
+        silenceSeconds = try c.decodeIfPresent(Double.self, forKey: .silenceSeconds) ?? silenceSeconds
+        smoothingSeconds = try c.decodeIfPresent(Double.self, forKey: .smoothingSeconds) ?? smoothingSeconds
+    }
+
+    public var tracker: PresenceTracker.Settings {
+        var s = PresenceTracker.Settings()
+        s.nearRSSI = min(-40, max(-95, nearRSSI))
+        s.awayRSSI = min(s.nearRSSI - 6, max(-105, awayRSSI))      // always a gap between the two
+        s.weakSeconds = min(600, max(5, graceSeconds))
+        s.lostSeconds = min(900, max(15, silenceSeconds))
+        s.smoothingSeconds = min(30, max(0, smoothingSeconds))
+        return s
+    }
+}
+
 /// Face recognition and the owner lock. Missing values take the defaults below.
 public struct FaceConfig: Codable, Equatable, Sendable {
     /// The lock is on. Only has an effect once a face is enrolled.
@@ -42,7 +80,7 @@ public struct FaceConfig: Codable, Equatable, Sendable {
     }
     public var lock: OwnerLock.Settings {
         var s = OwnerLock.Settings()
-        s.enabled = enabled
+        s.faceRequired = enabled
         s.decisionSeconds = min(15, max(1, decisionSeconds))
         s.overrideMinutes = min(120, max(1, overrideMinutes))
         return s
@@ -352,6 +390,7 @@ public struct Profile: Codable, Equatable {
     public var local: Local?
     public var memory: MemoryConfig?
     public var face: FaceConfig?
+    public var phone: PhoneConfig?
     public var ui: UI?
     public var voice: Voice?
     public var web: Web?
