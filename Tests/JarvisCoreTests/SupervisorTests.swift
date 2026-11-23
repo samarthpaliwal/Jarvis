@@ -46,3 +46,46 @@ final class SupervisorTests: XCTestCase {
         XCTAssertTrue(looping)
     }
 }
+
+final class HangWatchdogTests: XCTestCase {
+    final class Clock: @unchecked Sendable { var t: TimeInterval = 1000 }
+
+    func testFiresOnceWhenTheMainThreadStopsAnswering() {
+        let clock = Clock()
+        var hangs: [TimeInterval] = []
+        let w = HangWatchdog(timeout: 30, interval: 5, uptime: { clock.t }) { hangs.append($0) }
+        clock.t += 5;  w.tick(); w.pong()              // healthy: answered
+        clock.t += 5;  w.tick(); w.pong()
+        XCTAssertTrue(hangs.isEmpty)
+        for _ in 0..<5 { clock.t += 5; w.tick() }      // 25 s of silence: not yet
+        XCTAssertTrue(hangs.isEmpty)
+        clock.t += 5; w.tick()                         // 30 s
+        XCTAssertEqual(hangs.count, 1)
+        XCTAssertEqual(hangs[0], 30, accuracy: 0.001)
+        clock.t += 5; w.tick()
+        XCTAssertEqual(hangs.count, 1, "it reports a hang once, not on every tick")
+    }
+
+    func testSleepDoesNotLookLikeAHang() {
+        // The clock is system uptime, which does not advance while the Mac sleeps: after eight hours
+        // asleep, the silence is still only the few seconds since the last answer.
+        let clock = Clock()
+        var hangs = 0
+        let w = HangWatchdog(timeout: 30, uptime: { clock.t }) { _ in hangs += 1 }
+        w.pong()
+        clock.t += 4                                   // lid closed here; uptime stands still
+        XCTAssertEqual(w.tick(), 4, accuracy: 0.001)
+        XCTAssertEqual(hangs, 0)
+    }
+
+    func testRealMainThreadAnswersThePing() {
+        var hangs = 0
+        let w = HangWatchdog(timeout: 2, interval: 0.05) { _ in hangs += 1 }
+        w.start()
+        let done = expectation(description: "ran a while")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { done.fulfill() }
+        wait(for: [done], timeout: 2)
+        w.stop()
+        XCTAssertEqual(hangs, 0, "a responsive main thread never trips it")
+    }
+}

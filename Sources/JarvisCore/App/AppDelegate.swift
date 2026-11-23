@@ -20,6 +20,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var timers: TimerService!
     public private(set) var actionLog: ActionLog!
     private var restartedAfterCrash = false
+    private var hangWatchdog: HangWatchdog!
     public private(set) var budget: Budget!
     public private(set) var contacts: ContactBook!
     public private(set) var frames: FrameSources!
@@ -210,6 +211,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         voice.isOnline = { [weak self] in self?.brain.isOnline ?? true }
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
         conversation.onFirstWord = { [weak self] in self?.brain.prewarmIfCold() }
+        // A frozen main thread is not a crash, so launchd would never notice. This does.
+        let supervised = Supervisor.isLoaded
+        hangWatchdog = HangWatchdog(timeout: config.tuning.hangTimeoutSeconds) { silent in
+            JarvisLog.error("Main thread has not responded for \(Int(silent)) s. " + (supervised ? "Exiting so launchd restarts Jarvis." : "Jarvis is frozen; quit and reopen it."))
+            if supervised {
+                Thread.sleep(forTimeInterval: 0.3)     // let the log line reach the disk
+                exit(70)
+            }
+        }
+        hangWatchdog.start()
         if restartedAfterCrash {
             JarvisLog.warn("Previous run did not exit cleanly (crash or kill); restarted")
             // Say so once the voice is ready, so a restart is never silent.
@@ -311,6 +322,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!hud" { self.hud.show(scene: false); return }
                                             if q == "!prewarm" { self.brain.prewarmIfCold(force: true); return }   // silent: no HUD, no speech
                                             if q.hasPrefix("!camera") { self.cameraDebug(q); return }               // drives the camera without a model turn
+                                            if q == "!hang" { JarvisLog.warn("Debug: freezing the main thread on purpose"); Thread.sleep(forTimeInterval: 120); return }
                                             if q == "!brief" {
                                                 Task { let r = await self.briefing.build(mode: self.modes.current); self.conversation.deliver(await self.narrator.narrate(r, kind: "briefing on request"), cards: [.briefing(r.data)]) }
                                                 return
@@ -347,6 +359,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch parts.dropFirst().first ?? "" {
                 case "show": try await camera.showFeed(); JarvisLog.info("Camera debug: feed visible=\(camera.isFeedVisible) running=\(camera.session.isRunning)")
                 case "hide": let r = await camera.hideFeed(); JarvisLog.info("Camera debug: hidden, running=\(camera.session.isRunning), recording saved=\(r != nil)")
+                case "ping": JarvisLog.info("Camera debug: main thread alive, feed=\(camera.isFeedVisible) running=\(camera.session.isRunning) recording=\(camera.isRecording)")
                 case "frame":
                     let f = try await frames.source(named: "camera").captureFrame()
                     JarvisLog.info("Camera debug: frame \(f.width)x\(f.height), \(f.jpeg.count / 1024) KB, in memory only")

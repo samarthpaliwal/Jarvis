@@ -156,6 +156,10 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var sessionMemoryMinutes: Double = 30
     public var sessionMemoryExchanges: Int = 6
 
+    // Stability
+    /// If the main thread does not respond for this many seconds, Jarvis exits so the supervisor restarts it. 0 = off.
+    public var hangTimeoutSeconds: Double = 30
+
     // Camera
     /// The longest video Jarvis will record in one go, in seconds.
     public var videoMaxSeconds: Double = 300
@@ -231,6 +235,7 @@ public struct Tuning: Codable, Equatable, Sendable {
         cachePrewarmAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .cachePrewarmAfterSeconds) ?? cachePrewarmAfterSeconds
         sessionMemoryMinutes = try c.decodeIfPresent(Double.self, forKey: .sessionMemoryMinutes) ?? sessionMemoryMinutes
         sessionMemoryExchanges = try c.decodeIfPresent(Int.self, forKey: .sessionMemoryExchanges) ?? sessionMemoryExchanges
+        hangTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .hangTimeoutSeconds) ?? hangTimeoutSeconds
         videoMaxSeconds = try c.decodeIfPresent(Double.self, forKey: .videoMaxSeconds) ?? videoMaxSeconds
         speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn
         followUpGuardMilliseconds = try c.decodeIfPresent(Double.self, forKey: .followUpGuardMilliseconds) ?? followUpGuardMilliseconds

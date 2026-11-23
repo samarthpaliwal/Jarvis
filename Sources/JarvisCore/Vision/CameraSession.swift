@@ -59,6 +59,7 @@ public final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
                     let wasRunning = session.isRunning
                     holders.insert(holder)
                     if !wasRunning { session.startRunning() }
+                    set(running: true)
                     cont.resume(returning: wasRunning)
                 } catch {
                     cont.resume(throwing: error)
@@ -72,6 +73,7 @@ public final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
         queue.async { [self] in
             holders.remove(holder)
             guard holders.isEmpty, session.isRunning, !movieOutput.isRecording else { return }
+            set(running: false)      // before the slow call: the camera is on its way off
             session.stopRunning()
             if let a = audioInput {
                 session.beginConfiguration(); session.removeInput(a); session.commitConfiguration()
@@ -80,8 +82,20 @@ public final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
     }
 
-    public var isRunning: Bool { queue.sync { session.isRunning } }
-    public var isRecording: Bool { queue.sync { movieOutput.isRecording } }
+    // State readable from any thread without touching the camera queue. Reading it with `queue.sync` from
+    // the main thread deadlocked the app on 2026-11-22: stopRunning() on the camera queue waits for the
+    // main thread, which was waiting for the camera queue.
+    private let stateLock = NSLock()
+    private var runningFlag = false
+    private var recordingFlag = false
+    public var isRunning: Bool { stateLock.lock(); defer { stateLock.unlock() }; return runningFlag }
+    public var isRecording: Bool { stateLock.lock(); defer { stateLock.unlock() }; return recordingFlag }
+    private func set(running: Bool? = nil, recording: Bool? = nil) {
+        stateLock.lock()
+        if let running { runningFlag = running }
+        if let recording { recordingFlag = recording }
+        stateLock.unlock()
+    }
 
     private func configureIfNeeded() throws {
         guard !configured else { return }
@@ -158,6 +172,7 @@ public final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
                 session.commitConfiguration()
                 movieOutput.maxRecordedDuration = maxSeconds > 0 ? CMTime(seconds: maxSeconds, preferredTimescale: 600) : .invalid
                 startWaiter = cont
+                set(recording: true)
                 movieOutput.startRecording(to: url, recordingDelegate: self)
             }
         }
@@ -189,6 +204,7 @@ public final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             let finishedCleanly = error == nil || ((error as NSError?)?.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true)
             let started = recordingStartedAt
             recordingStartedAt = nil
+            set(recording: false)
             let result: Result<Recording, Error>
             if finishedCleanly {
                 let seconds = recorded.isFinite && recorded > 0 ? recorded : Date().timeIntervalSince(started ?? Date())
@@ -207,7 +223,7 @@ public final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             } else {
                 onRecordingEndedByItself?(result)
             }
-            if holders.isEmpty, session.isRunning { session.stopRunning() }
+            if holders.isEmpty, session.isRunning { set(running: false); session.stopRunning() }
         }
     }
 }

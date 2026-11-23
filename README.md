@@ -702,6 +702,9 @@ removes the same file.
 - **Quit from the menu, or a plain `kill`,** is a clean exit and stays quit.
 - **A crash loop** is stopped from inside: more than five starts in two minutes and Jarvis exits cleanly,
   so launchd leaves it alone. The reason is in `jarvis.log` and `launchd.err.log`.
+- **A frozen app** is caught too. A crash is not the only way to die: a background timer pings the main
+  thread, and if it has not answered for 30 seconds (`tuning.hangTimeoutSeconds`) Jarvis logs it and exits,
+  so launchd starts a fresh copy. The clock it uses stands still while the Mac sleeps.
 - **Only one copy runs.** A second copy (the login item and the agent both firing) exits at once.
 - `scripts/run.sh` notices the agent and restarts through launchd instead of opening a second copy.
 
