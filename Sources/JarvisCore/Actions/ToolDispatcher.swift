@@ -42,6 +42,8 @@ public final class ToolDispatcher {
     public var approvalHandler: ((ApprovalRequest) async -> Bool)?
     /// Called after Tier 1+ actions with the one-liner ("Set volume to 40%").
     public var onSummary: ((String) -> Void)?
+    /// Seconds one tool may run. Read from Tuning on every call.
+    public var toolTimeout: Double { config.tuning.toolTimeoutSeconds }
 
     private let config: ConfigStore
     private let log: ActionLog
@@ -130,7 +132,11 @@ public final class ToolDispatcher {
             record("approved", tier: .approve, summary: request.preview)
         }
         do {
-            var result = try await tool.run(input: input, context: context)
+            // A tool that hangs (one Gmail call once ran for 15 minutes) must not hang the request.
+            let context = context
+            var result = try await withDeadline("\(name)", seconds: toolTimeout) { @MainActor in
+                try await tool.run(input: input, context: context)
+            }
             let redacted = SecretRedactor.redact(result.content)
             if !redacted.kinds.isEmpty {
                 result.content = redacted.text
@@ -140,6 +146,10 @@ public final class ToolDispatcher {
                    summary: [result.summary, redacted.kinds.isEmpty ? nil : "redacted: \(redacted.kinds.joined(separator: ","))"].compactMap { $0 }.joined(separator: " · "))
             if tool.tier >= .free, let s = result.summary, !result.isError { onSummary?(s) }
             return result
+        } catch let timeout as TimeoutError {
+            record("timeout", tier: tool.tier, summary: timeout.localizedDescription)
+            JarvisLog.error("Tool \(name) timed out after \(Int(timeout.seconds)) s")
+            return .error("\(name) did not finish within \(Int(timeout.seconds)) seconds and was stopped. Tell the user it timed out.")
         } catch {
             record("failed", tier: tool.tier, summary: error.localizedDescription)
             return .error(error.localizedDescription)

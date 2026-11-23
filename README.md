@@ -565,6 +565,25 @@ Jarvis answering its own voice:
 Approvals are stricter still: Jarvis starts listening for "yes" or "no" only after its own prompt has
 finished playing, and ignores anything heard while it is speaking.
 
+## When something fails
+
+The rule: every failure produces one short spoken sentence (or an on-screen one when voice is off), and
+the pipeline returns to `idle`. Nothing fails silently and nothing hangs.
+
+| Failure | What happens |
+|---------|--------------|
+| Claude error, rate limit, bad key, no network | Spoken in plain words ("I'm offline right now."). No status codes. |
+| The model or a tool never answers | The request stops at `tuning.turnTimeoutSeconds` (120 s): "That took too long, so I stopped. Try again." |
+| One tool hangs | Stopped at `tuning.toolTimeoutSeconds` (45 s). Claude is told it timed out and says so. Logged as `timeout`. |
+| Speech recognition fails or is not permitted | Spoken once, then shown only for `tuning.repeatErrorAfterSeconds`. |
+| The microphone delivers no audio | After three silent rebuilds: "I'm not getting any sound from the microphone." Announced again when it returns. |
+| The audio device changes or disappears | Restarts are coalesced and backed off; the audio framework's exceptions are caught instead of crashing. |
+| A cloud or Kokoro voice fails | The sentence is spoken by the Apple voice instead. |
+| A transition the state table does not allow | Logged and counted (`Illegal transition`). |
+
+The messages live in [Pipeline/Failures.swift](Sources/JarvisCore/Pipeline/Failures.swift). The tests force
+each failure with fakes and check that Jarvis speaks and recovers.
+
 ## Logs and tracing
 
 Everything lives in `~/Library/Logs/Jarvis/` (menu → *Open Logs*):

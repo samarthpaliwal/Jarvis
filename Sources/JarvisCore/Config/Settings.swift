@@ -110,6 +110,12 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var webFetchMaxContentTokens: Int = 8000
     /// A Tier 2 approval that gets no answer in this long counts as "no".
     public var approvalTimeoutSeconds: Double = 12
+    /// One tool call may run this long before Jarvis gives up on it and says so.
+    public var toolTimeoutSeconds: Double = 45
+    /// One whole request (model rounds plus tools) may run this long. Time spent waiting for an approval counts.
+    public var turnTimeoutSeconds: Double = 120
+    /// The same spoken error is not repeated within this many seconds (it is still shown).
+    public var repeatErrorAfterSeconds: Double = 60
 
     // Speech out
     public var kokoroPort: Int = 8880
@@ -154,6 +160,9 @@ public struct Tuning: Codable, Equatable, Sendable {
         localToolCallBudgetPerTurn = try c.decodeIfPresent(Int.self, forKey: .localToolCallBudgetPerTurn) ?? localToolCallBudgetPerTurn
         webFetchMaxContentTokens = try c.decodeIfPresent(Int.self, forKey: .webFetchMaxContentTokens) ?? webFetchMaxContentTokens
         approvalTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .approvalTimeoutSeconds) ?? approvalTimeoutSeconds
+        toolTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .toolTimeoutSeconds) ?? toolTimeoutSeconds
+        turnTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .turnTimeoutSeconds) ?? turnTimeoutSeconds
+        repeatErrorAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .repeatErrorAfterSeconds) ?? repeatErrorAfterSeconds
         kokoroPort = try c.decodeIfPresent(Int.self, forKey: .kokoroPort) ?? kokoroPort
         openaiTtsModel = try c.decodeIfPresent(String.self, forKey: .openaiTtsModel) ?? openaiTtsModel
         ttsRequestTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .ttsRequestTimeoutSeconds) ?? ttsRequestTimeoutSeconds

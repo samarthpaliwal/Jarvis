@@ -38,6 +38,8 @@ public final class WakeWordService: ObservableObject {
     public var onLevel: ((Float) -> Void)?
     /// Every 80 ms chunk, on the capture queue, regardless of pause state. Feeds the transcriber.
     public nonisolated(unsafe) var audioTap: (([Float]) -> Void)?
+    /// Microphone trouble the user should hear about: "deaf", "hearing", "denied", or "failed". Main actor.
+    public var onMicHealth: ((String) -> Void)?
 
     public let capture = AudioCapture()
     /// Wake threshold, cooldown, and microphone recovery timings. Safe to set before or after start().
@@ -70,6 +72,8 @@ public final class WakeWordService: ObservableObject {
             Task { @MainActor in
                 self?.runner.reset()
                 if msg.hasPrefix("failed") { self?.state = .failed(msg) }
+                if msg == "deaf" || msg == "hearing" { self?.onMicHealth?(msg) }
+                if msg.hasPrefix("restarted"), case .failed = self?.state { self?.state = .listening }
             }
         }
         runner.onDetection = { [weak self] date in
@@ -89,6 +93,7 @@ public final class WakeWordService: ObservableObject {
         guard await AudioCapture.requestMicrophoneAccess() else {
             state = .micDenied
             JarvisLog.warn("Microphone access denied; wake word disabled")
+            onMicHealth?("denied")
             return
         }
         do {
@@ -108,6 +113,7 @@ public final class WakeWordService: ObservableObject {
         } catch {
             state = .failed(error.localizedDescription)
             JarvisLog.error("Wake word start failed: \(error.localizedDescription)")
+            onMicHealth?("failed")
         }
     }
 

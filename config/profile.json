@@ -173,6 +173,9 @@
     "logKeepFiles": 3,
     "speechBargeIn": "headphones",
     "followUpGuardMilliseconds": 350,
-    "echoWindowSeconds": 20
+    "echoWindowSeconds": 20,
+    "toolTimeoutSeconds": 45,
+    "turnTimeoutSeconds": 120,
+    "repeatErrorAfterSeconds": 60
   }
 }

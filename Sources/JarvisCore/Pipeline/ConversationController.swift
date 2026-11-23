@@ -33,6 +33,7 @@ public final class ConversationController: ObservableObject {
     private var lastSpokeAt = Date.distantPast
     /// Reports whether the output is headphones. Swappable for tests.
     public var outputIsHeadphones: () -> Bool = { AudioDeviceInfo.outputIsHeadphones() }
+    private var errorSpeech = SpeechRateLimit()
     private var lastUserText = ""
     nonisolated static let endWords: Set<String> = ["thanks", "thank", "thankyou", "bye", "goodbye", "later", "done", "nevermind", "never", "cheers", "nothing", "no"]
 
@@ -271,13 +272,21 @@ public final class ConversationController: ObservableObject {
         transcriber.cancel()
         wake.setPaused(false)
         transition(.sttFailed)
-        let msg: String
-        if case TranscriberError.notAuthorized = error {
-            msg = "I need Speech Recognition permission. System Settings → Privacy & Security → Speech Recognition."
+        onTurnActive?(false)
+        notch.isFollowUp = false
+        reportFailure(SpokenFailure.message(for: error))
+    }
+
+    /// Says a failure aloud (and shows it). Used for failures outside a reply: recognizer, microphone.
+    /// The same message is spoken once per `tuning.repeatErrorAfterSeconds`; repeats are shown only.
+    public func reportFailure(_ message: String) {
+        errorSpeech.window = config.tuning.repeatErrorAfterSeconds
+        JarvisLog.warn("Failure reported: \(message)", request: trace?.id)
+        if errorSpeech.shouldSpeak(message), state == .idle {
+            deliver(message)
         } else {
-            msg = "Speech recognition isn’t available right now."
+            notch.respond(message, collapseAfter: 6)
         }
-        notch.respond(msg, collapseAfter: 6)
     }
 
     private func endListening(reason: Endpointer.Reason) {
@@ -385,34 +394,43 @@ public final class ConversationController: ObservableObject {
         var spokeSomething = false
         currentReply = ""
 
-        let onText: (String) -> Void = { [weak self] delta in
+        let request = RequestTrace.current
+        // Reply text must be applied in the order it arrives, and before `respond` decides what is
+        // left to say. It used to hop through a deferred task, so a fast reply (or an error message)
+        // could be checked before it had been applied, and was then spoken twice or out of order.
+        let apply: @MainActor (String) -> Void = { [weak self] delta in
             guard let self else { return }
-            Task { @MainActor in
-                if firstDelta {
-                    firstDelta = false
-                    let ms = Date().timeIntervalSince(self.speechEndedAt) * 1000
-                    self.lastTurn.endOfSpeechToReplyMs = ms
-                    RequestTrace.current?.event(.intent, "first_token")
-                    JarvisLog.info(String(format: "End of speech → first reply token %.0f ms", ms))
-                }
-                if self.state == .thinking, voiceOn { self.transition(.replyStarted); self.listenForStop() }
-                self.notch.appendReply(delta)
-                self.currentReply += delta
-                self.notch.cancelCollapse()
-                if voiceOn {
-                    for sentence in chunker.push(delta) {
-                        spokeSomething = true
-                        self.speech.enqueue(sentence, volume: volume, rate: rate)
-                    }
+            if firstDelta {
+                firstDelta = false
+                let ms = Date().timeIntervalSince(self.speechEndedAt) * 1000
+                self.lastTurn.endOfSpeechToReplyMs = ms
+                request?.event(.intent, "first_token")
+                JarvisLog.info(String(format: "End of speech → first reply token %.0f ms", ms), request: request?.id)
+            }
+            if self.state == .thinking, voiceOn { self.transition(.replyStarted); self.listenForStop() }
+            self.notch.appendReply(delta)
+            self.currentReply += delta
+            self.notch.cancelCollapse()
+            if voiceOn {
+                for sentence in chunker.push(delta) {
+                    spokeSomething = true
+                    self.speech.enqueue(sentence, volume: volume, rate: rate)
                 }
             }
         }
+        let onText: (String) -> Void = { delta in
+            if Thread.isMainThread { MainActor.assumeIsolated { apply(delta) } }
+            else { DispatchQueue.main.async { MainActor.assumeIsolated { apply(delta) } } }   // the local model streams off the main thread
+        }
 
-        let request = RequestTrace.current
         var failed = false
         var turn: Brain.Turn
         do {
-            turn = try await responder(text, onText)
+            // A deadline on the whole request: a stuck model stream or tool can never hang the pipeline.
+            let responder = responder
+            turn = try await withDeadline("The request", seconds: config.tuning.turnTimeoutSeconds) { @MainActor in
+                try await responder(text, onText)
+            }
         } catch is CancellationError {
             request?.finish(outcome: "cancelled")
             return
@@ -420,11 +438,14 @@ public final class ConversationController: ObservableObject {
             turn = Brain.Turn()
             let msg = Self.friendly(error)
             turn.text = msg
-            onText(msg)
+            // After a timeout, anything already said stays said; add the failure as its own sentence.
+            onText(currentReply.isEmpty ? msg : " " + msg)
             failed = true
-            request?.event(.intent, "error", ["error": String(describing: type(of: error)), "message": String(error.localizedDescription.prefix(200))])
+            request?.event(SpokenFailure.stage(of: error), "error", ["error": String(describing: type(of: error)), "message": String(error.localizedDescription.prefix(200))])
             JarvisLog.error("Brain: \(error.localizedDescription)")
         }
+        // Anything streamed from another thread is queued on the main queue; let it land first.
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in DispatchQueue.main.async { c.resume() } }
         request?.event(.intent, "llm_done", ["engine": turn.engine, "chars": turn.text.count])
         request?.set("engine", turn.engine)
         request?.set("tokens", ["in": turn.inputTokens, "out": turn.outputTokens, "cache_read": turn.cacheReadTokens, "cache_write": turn.cacheWriteTokens])
@@ -517,10 +538,7 @@ public final class ConversationController: ObservableObject {
     }
 
     static func friendly(_ error: Error) -> String {
-        if let e = error as? ClaudeClient.ClientError { return e.localizedDescription }
-        let ns = error as NSError
-        if ns.domain == NSURLErrorDomain { return "I can't reach Claude right now. Check the connection." }
-        return "Something went wrong: \(error.localizedDescription)"
+        SpokenFailure.message(for: error)
     }
 
     // MARK: Tier 2 approval

@@ -162,6 +162,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                               speech: voice, config: config, modes: modes, brain: brain)
         voice.isOnline = { [weak self] in self?.brain.isOnline ?? true }
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
+        // Microphone trouble is said out loud, once, instead of leaving Jarvis silently deaf.
+        wake.onMicHealth = { [weak self] health in
+            guard let self else { return }
+            switch health {
+            case "deaf": self.conversation.reportFailure(SpokenFailure.microphoneSilent)
+            case "hearing": self.conversation.reportFailure(SpokenFailure.microphoneBack)
+            case "denied": self.conversation.reportFailure(SpokenFailure.microphoneDenied)
+            default: self.conversation.reportFailure(SpokenFailure.wakeFailed)
+            }
+        }
         // One chat at a time: when the card goes away, the conversation ends and starts fresh next time.
         notch.$phase.removeDuplicates().dropFirst().sink { [weak self] phase in
             guard let self, phase == .idle else { return }
