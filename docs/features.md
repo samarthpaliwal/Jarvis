@@ -389,6 +389,28 @@ or oddly named button can be clicked without a question. Jarvis is told to stop 
 sends, buys, or deletes, and the gates above catch the usual cases, but watch it while it works.
 A request gets at most sixteen steps, so long tasks need to be asked for in parts.
 
+### Watching what it sees
+
+Each time Jarvis looks at the screen, the picture it took appears in a small window in the top-right corner,
+with a line saying what it did next ("Clicked Images", "Typed …"). Clicks pass through the window, it is never
+part of the next picture, and it disappears, picture and all, when control turns off.
+
+## Phone radar (Bluetooth)
+
+Jarvis can tell whether your phone is near the Mac from the strength of its Bluetooth signal.
+
+Set up: menu → **Phone Radar** → **Set My Phone…**, hold the unlocked iPhone against the Mac, click Start.
+Jarvis listens for six seconds and offers the closest Apple device. macOS asks once to let Jarvis use Bluetooth.
+
+- **Near** means a strong signal (roughly the same room). **Away** means a very weak signal for 45 seconds, or
+  nothing heard for 90. The gap between the two keeps it from flapping at the edge of the room.
+- The menu shows the state and a rough distance. Distance from signal strength is a guide: a wall or a pocket
+  changes it a lot.
+- It only listens. It never connects to the phone, and nothing leaves the Mac.
+- Limits: the phone's Bluetooth must be on. iPhones hide their Bluetooth identity from strangers; a Mac signed
+  in to the same Apple Account can normally still recognise it, but if the radar loses the phone after a day or
+  so, run Set My Phone again and tell me.
+
 ## Vision: looking on demand
 
 "Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.

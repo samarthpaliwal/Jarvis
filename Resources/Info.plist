@@ -32,6 +32,8 @@
     <string>Jarvis creates reminders and timers you ask for and lists what is due today.</string>
     <key>NSRemindersUsageDescription</key>
     <string>Jarvis creates reminders and timers you ask for and lists what is due today.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Jarvis listens for your phone's Bluetooth signal to tell whether you are near the Mac. It never connects to anything, and nothing leaves this Mac.</string>
     <key>NSLocationUsageDescription</key>
     <string>Jarvis switches between Home, Class, Work and Road modes based on where you are. Location stays on this Mac.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

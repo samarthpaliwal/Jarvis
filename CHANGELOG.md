@@ -9,6 +9,8 @@
 - **Stay Awake While Plugged In** (menu): the Mac stays reachable from the phone while on the charger.
 - **Mouse and keyboard control** (`computer`): off until asked, ten minutes at a time, Esc stops it; blocked
   apps and pages, password fields, risky clicks and Return gated in code. The HUD steps aside for browser pages.
+- **Phone radar:** near/away from the phone's Bluetooth signal (menu → Phone Radar). Computer control shows
+  a corner preview of each picture it takes.
 - **HUD:** no longer disappears when a conversation starts during its fade-out; new menu switch
   *Keep HUD On Screen Until I Click It*.
 

@@ -63,6 +63,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var moveLog: MoveLog!
     public private(set) var hud: HUDWindowController!
     public let computerControl = ComputerControl()
+    public let radar = PhoneRadar()
     private var controlWatcher: ControlInterruptWatcher?
     private var controlTimer: Timer?
     public private(set) var spotter: PhraseSpotter!
@@ -395,6 +396,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.budget = budget
         menuBar.camera = camera
         menuBar.computerControl = computerControl
+        menuBar.radar = radar
+        radar.onChange = { [weak self] now, before in
+            guard let self, before != .unknown || now == .away else { return }      // the first "near" after launch is not news
+            self.notch.flash(now == .near ? "\(self.radar.phoneName) is back" : "\(self.radar.phoneName) has left")
+        }
+        radar.start()
         menuBar.voiceID = voiceID
         menuBar.keys = self
         menuBar.remote = remote

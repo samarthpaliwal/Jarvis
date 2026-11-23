@@ -23,6 +23,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     /// Set by the app; adds the Camera submenu.
     public var camera: CameraController?
     var computerControl: ComputerControl?
+    var radar: PhoneRadar?
     /// Set by the app; adds the Voice ID submenu.
     public var voiceID: SpeakerVerifier?
     /// Set by the app; adds the Privacy submenu: where data goes with the current settings.
@@ -640,6 +641,24 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         login.state = LaunchAtLogin.isEnabled ? .on : .off
         login.isEnabled = LaunchAtLogin.isAvailable && !Supervisor.isInstalled   // the supervisor already starts it at login
         menu.addItem(login)
+        if let radar {
+            let sub = NSMenu()
+            let line = NSMenuItem(title: radar.statusLine, action: nil, keyEquivalent: ""); line.isEnabled = false; sub.addItem(line)
+            let toggle = ClosureMenuItem(title: "Use My Phone as Radar (Bluetooth)", symbol: "dot.radiowaves.left.and.right") { [notch] in
+                if radar.phoneID == nil { notch.flash("Choose your phone first: Set My Phone…"); return }
+                radar.enabled.toggle()
+                notch.flash(radar.enabled ? "Phone radar on" : "Phone radar off")
+            }
+            toggle.state = radar.enabled ? .on : .off
+            sub.addItem(toggle)
+            sub.addItem(ClosureMenuItem(title: radar.phoneID == nil ? "Set My Phone…" : "Change My Phone…", symbol: "iphone") { [notch] in
+                MenuBarController.setPhone(radar: radar, notch: notch)
+            })
+            let item = NSMenuItem(title: "Phone Radar", action: nil, keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "dot.radiowaves.left.and.right", accessibilityDescription: nil)
+            item.submenu = sub
+            menu.addItem(item)
+        }
         if let control = computerControl {
             let on = control.isEnabled
             let item = ClosureMenuItem(title: on ? "Computer Control: on, \(control.minutesLeft) min left (click to turn off)" : "Computer Control: off (say “enable computer control”)", symbol: "cursorarrow.click.2") {
@@ -719,6 +738,45 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
             JarvisLog.info("API key stored in Keychain")
         } catch {
             notch.flash("Couldn’t save key: \(error.localizedDescription)", seconds: 6)
+        }
+    }
+
+    /// Choosing the phone: hold it against the Mac, and the strongest Apple signal in the next few seconds is it.
+    /// The alerts open from the run loop, never from inside a Task (that once froze the main queue).
+    static func setPhone(radar: PhoneRadar, notch: NotchViewModel) {
+        RunLoop.main.perform {
+            MainActor.assumeIsolated {
+                let intro = NSAlert()
+                intro.messageText = "Set your phone"
+                intro.informativeText = "Unlock your iPhone, make sure its Bluetooth is on, and hold it right against this Mac. Then click Start. Jarvis listens for six seconds and picks the closest Apple device. macOS may ask to let Jarvis use Bluetooth the first time."
+                intro.addButton(withTitle: "Start")
+                intro.addButton(withTitle: "Cancel")
+                NSApp.activate(ignoringOtherApps: true)
+                guard intro.runModal() == .alertFirstButtonReturn else { return }
+                notch.flash("Listening for your phone…")
+                Task { @MainActor in
+                    let found = await radar.findClosest()
+                    RunLoop.main.perform {
+                        MainActor.assumeIsolated {
+                            let done = NSAlert()
+                            guard let found else {
+                                done.messageText = "No phone found"
+                                done.informativeText = "Nothing from Apple was close enough (Bluetooth: \(radar.bluetoothState)). Check that Bluetooth is on for both the Mac and the phone, and that Jarvis is allowed under System Settings → Privacy & Security → Bluetooth, then try again with the phone touching the Mac."
+                                done.runModal()
+                                return
+                            }
+                            done.messageText = "Use \(found.name ?? "this Apple device")?"
+                            done.informativeText = "It is \(PresenceTracker.describe(rssi: found.rssi)) (signal \(Int(found.rssi))). If your Apple Watch or AirPods were closer than the phone, cancel and try again with only the phone near the Mac."
+                            done.addButton(withTitle: "Use It")
+                            done.addButton(withTitle: "Cancel")
+                            if done.runModal() == .alertFirstButtonReturn {
+                                radar.choose(found)
+                                notch.flash("Phone radar on: \(radar.phoneName)")
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
