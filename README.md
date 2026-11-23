@@ -537,7 +537,7 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
 | 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
 | 1 free (people) | undoable | `contacts` (find, save, remove, list) |
-| 1 free (camera) | user requests only; asks first after outside content | `look` |
+| 1 free (camera) | user requests only; asks first after outside content | `look`, `camera` (live feed, photo, video) |
 | 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches`, `calendar_cancel`, `email_send` |
 | 3 never | denylist.json + hard-coded floor | — |
 
@@ -568,6 +568,32 @@ The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTest
 - **Permission.** macOS asks for camera access the first time. Deny it and everything else keeps working.
 - **People.** Jarvis describes what it sees and does not identify real people from their faces.
 - **Private Mode** has no vision: the local model cannot see.
+
+### Live feed, photos, and video
+
+"Show me the camera" opens a small floating window with the live picture. "Record a video" and "take a
+photo" save to folders Jarvis creates: `~/Movies/Jarvis` and `~/Pictures/Jarvis`. The same things are in the
+menu under *Camera*.
+
+| Say | What happens |
+|-----|--------------|
+| "Show me the camera." / "Close the camera." | Opens or closes the live feed. The camera is on while the window is open. |
+| "Record a video." / "Record 20 seconds." | Starts recording, with sound. Opens the feed if it is closed. |
+| "Stop recording." | Saves the video and says where. |
+| "Take a photo." | Saves one still. |
+
+- **A recording is always visible.** It only runs while the feed window is open, and the window shows a red
+  `● REC` badge with a running clock. Closing the window stops the recording and turns the camera off.
+- **Every recording ends.** With no length given it stops at five minutes (`tuning.videoMaxSeconds`), and
+  Jarvis says so.
+- **Nothing is uploaded.** The feed and the files never leave the Mac. Only `look` sends anything, and that
+  is one frame.
+- **Same rules as `look`:** user requests only, and a yes is needed first if the request read outside content.
+- The feed is mirrored, like a mirror. Photos and videos are not.
+
+One camera session is shared by the feed, `look`, photos, and video
+([Vision/CameraSession.swift](Sources/JarvisCore/Vision/CameraSession.swift)). It turns off when the last of
+them is done.
 
 Frames come from a `FrameSource` ([Vision/FrameSource.swift](Sources/JarvisCore/Vision/FrameSource.swift)).
 `camera` is the Mac's camera. `glasses` is a `PushedFrameSource`: a bridge pushes its newest frame and

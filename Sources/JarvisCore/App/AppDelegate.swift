@@ -23,6 +23,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var budget: Budget!
     public private(set) var contacts: ContactBook!
     public private(set) var frames: FrameSources!
+    public private(set) var camera: CameraController!
     public private(set) var glasses: PushedFrameSource!
     private var termSource: DispatchSourceSignal?
     public private(set) var calendar: CalendarService!
@@ -170,7 +171,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         contacts = ContactBook(system: MacContacts())
         // Camera now; "glasses" is the hook a bridge will push frames into (remote-access phase).
         glasses = PushedFrameSource(name: "glasses")
-        frames = FrameSources([CameraFrameSource(), glasses], default: "camera")
+        camera = CameraController()
+        camera.maxRecordingSeconds = { [weak self] in self?.config.tuning.videoMaxSeconds ?? 300 }
+        camera.onNotice = { [weak self] text in self?.conversation?.announceWhenIdle(text) }
+        frames = FrameSources([CameraFrameSource(session: camera.session), glasses], default: "camera")
         dispatcher.register([
             SystemStatusTool(), OpenAppTool(), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
@@ -182,7 +186,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             SetBrightnessTool(), SetFocusTool(), RememberPlaceTool(detector: context),
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),
             MemoryTool(store: memory), MemorySearchTool(store: memory), WeatherTool(world: world), NewsHeadlinesTool(world: world),
-            UseSkillTool(library: skills), ContactsTool(book: contacts), LookTool(sources: frames),
+            UseSkillTool(library: skills), ContactsTool(book: contacts), LookTool(sources: frames), CameraTool(camera: camera),
         ])
         // Every paid call goes through one spend guard: a daily cap, a per-minute rate limit, and a ledger.
         budget = Budget(limits: config.tuning.budgetLimits, pricing: config.profile.pricing ?? Pricing())
@@ -285,6 +289,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                     proactive: proactive, context: context, hud: hud, scenes: scenes,
                                     memory: memory, skills: skills, local: local, narrator: narrator)
         menuBar.budget = budget
+        menuBar.camera = camera
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() == nil ? "MISSING" : "present")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
                                     onBriefing: { [weak self] in
@@ -305,6 +310,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!arrive" { self.spotter.openWindow(minutes: 10, reason: "debug"); return }
                                             if q == "!hud" { self.hud.show(scene: false); return }
                                             if q == "!prewarm" { self.brain.prewarmIfCold(force: true); return }   // silent: no HUD, no speech
+                                            if q.hasPrefix("!camera") { self.cameraDebug(q); return }               // drives the camera without a model turn
                                             if q == "!brief" {
                                                 Task { let r = await self.briefing.build(mode: self.modes.current); self.conversation.deliver(await self.narrator.narrate(r, kind: "briefing on request"), cards: [.briefing(r.data)]) }
                                                 return
@@ -331,6 +337,31 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let g = notchWindow.geometry
         JarvisLog.info("Notch detected=\(g.hasNotch) width=\(Int(g.notchWidth)) height=\(Int(g.notchHeight)) reduceMotion=\(notch.reduceMotion)")
+    }
+
+    /// `!camera show | hide | frame | photo | rec <seconds> [silent] | stop` in ask.txt. Results go to jarvis.log.
+    private func cameraDebug(_ command: String) {
+        let parts = command.split(separator: " ").map(String.init)
+        Task { @MainActor in
+            do {
+                switch parts.dropFirst().first ?? "" {
+                case "show": try await camera.showFeed(); JarvisLog.info("Camera debug: feed visible=\(camera.isFeedVisible) running=\(camera.session.isRunning)")
+                case "hide": let r = await camera.hideFeed(); JarvisLog.info("Camera debug: hidden, running=\(camera.session.isRunning), recording saved=\(r != nil)")
+                case "frame":
+                    let f = try await frames.source(named: "camera").captureFrame()
+                    JarvisLog.info("Camera debug: frame \(f.width)x\(f.height), \(f.jpeg.count / 1024) KB, in memory only")
+                case "photo": let url = try await camera.takePhoto(); JarvisLog.info("Camera debug: photo \(CameraFiles.display(url))")
+                case "rec":
+                    let seconds = parts.count > 2 ? Double(parts[2]) : nil
+                    let started = try await camera.startRecording(seconds: seconds, audio: !parts.contains("silent"))
+                    JarvisLog.info("Camera debug: recording started, limit \(Int(started.limit)) s")
+                case "stop": let r = try await camera.stopRecording(); JarvisLog.info("Camera debug: stopped, \(String(format: "%.1f", r.seconds)) s, \(r.bytes / 1024) KB, \(CameraFiles.display(r.url))")
+                default: JarvisLog.info("Camera debug: unknown command \(command)")
+                }
+            } catch {
+                JarvisLog.error("Camera debug: \(command) failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

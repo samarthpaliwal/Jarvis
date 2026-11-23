@@ -156,6 +156,10 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var sessionMemoryMinutes: Double = 30
     public var sessionMemoryExchanges: Int = 6
 
+    // Camera
+    /// The longest video Jarvis will record in one go, in seconds.
+    public var videoMaxSeconds: Double = 300
+
     // Echo: Jarvis hearing its own voice
     /// When talking over Jarvis interrupts it: "headphones" (only when the mic cannot hear the speakers),
     /// "always", or "never". Saying "stop" or the wake word always works.
@@ -227,6 +231,7 @@ public struct Tuning: Codable, Equatable, Sendable {
         cachePrewarmAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .cachePrewarmAfterSeconds) ?? cachePrewarmAfterSeconds
         sessionMemoryMinutes = try c.decodeIfPresent(Double.self, forKey: .sessionMemoryMinutes) ?? sessionMemoryMinutes
         sessionMemoryExchanges = try c.decodeIfPresent(Int.self, forKey: .sessionMemoryExchanges) ?? sessionMemoryExchanges
+        videoMaxSeconds = try c.decodeIfPresent(Double.self, forKey: .videoMaxSeconds) ?? videoMaxSeconds
         speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn
         followUpGuardMilliseconds = try c.decodeIfPresent(Double.self, forKey: .followUpGuardMilliseconds) ?? followUpGuardMilliseconds
         echoWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .echoWindowSeconds) ?? echoWindowSeconds

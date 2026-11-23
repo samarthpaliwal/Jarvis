@@ -20,6 +20,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     private let actionLog: ActionLog
     /// Set by the app once the spend guard exists; shown as a line in the menu.
     public var budget: Budget?
+    /// Set by the app; adds the Camera submenu.
+    public var camera: CameraController?
     private let googleAuth: GoogleAuth
     private let notion: NotionClient
     private let briefing: BriefingService
@@ -228,6 +230,50 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         integItem.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
         integItem.submenu = integ
         menu.addItem(integItem)
+        if let camera {
+            let cam = NSMenuItem(title: "Camera", action: nil, keyEquivalent: "")
+            cam.image = NSImage(systemSymbolName: "video", accessibilityDescription: nil)
+            let sub = NSMenu()
+            let feed = ClosureMenuItem(title: camera.isFeedVisible ? "Hide Live Feed" : "Show Live Feed", symbol: "eye") { [notch] in
+                Task { @MainActor in
+                    if camera.isFeedVisible { await camera.hideFeed() }
+                    else { do { try await camera.showFeed() } catch { notch.flash(error.localizedDescription, seconds: 6) } }
+                }
+            }
+            sub.addItem(feed)
+            let rec = ClosureMenuItem(title: camera.isRecording ? "Stop Recording" : "Start Recording", symbol: camera.isRecording ? "stop.circle" : "record.circle") { [notch] in
+                Task { @MainActor in
+                    do {
+                        if camera.isRecording {
+                            let r = try await camera.stopRecording()
+                            notch.flash("Saved a \(CameraFiles.spokenLength(r.seconds)) video to \(CameraFiles.display(r.url))", seconds: 6)
+                        } else {
+                            _ = try await camera.startRecording(seconds: nil, audio: true)
+                        }
+                    } catch { notch.flash(error.localizedDescription, seconds: 6) }
+                }
+            }
+            sub.addItem(rec)
+            sub.addItem(ClosureMenuItem(title: "Take Photo", symbol: "camera") { [notch] in
+                Task { @MainActor in
+                    do { let url = try await camera.takePhoto(); notch.flash("Photo saved to \(CameraFiles.display(url))", seconds: 5) }
+                    catch { notch.flash(error.localizedDescription, seconds: 6) }
+                }
+            })
+            sub.addItem(.separator())
+            sub.addItem(ClosureMenuItem(title: "Open Videos Folder", symbol: "folder") {
+                let dir = CameraFiles.directory(.video)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                NSWorkspace.shared.open(dir)
+            })
+            sub.addItem(ClosureMenuItem(title: "Open Photos Folder", symbol: "folder") {
+                let dir = CameraFiles.directory(.photo)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                NSWorkspace.shared.open(dir)
+            })
+            cam.submenu = sub
+            menu.addItem(cam)
+        }
         menu.addItem(ClosureMenuItem(title: "What Did You Do Today?", symbol: "list.bullet.clipboard") { [actionLog, notch] in
             let lines = actionLog.todaySummary()
             notch.respond(lines.isEmpty ? "Nothing yet today." : "\(lines.count) action(s) today.",

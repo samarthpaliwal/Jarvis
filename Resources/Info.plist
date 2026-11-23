@@ -41,7 +41,7 @@
     <key>NSContactsUsageDescription</key>
     <string>Jarvis looks up a person's email address or phone number when you ask it to write to them. Only the matching name, email and phone are read.</string>
     <key>NSCameraUsageDescription</key>
-    <string>Jarvis takes one picture when you ask it to look at something. The camera is never on otherwise, and the picture is not saved.</string>
+    <string>Jarvis uses the camera only when you ask: to look at something, to show a live feed, or to take a photo or video. Videos and photos are saved on this Mac.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Jarvis controls apps like Music, Finder and Notes when you ask it to.</string>
 </dict>
