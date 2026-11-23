@@ -47,7 +47,7 @@ public final class ConversationController: ObservableObject {
     public var responder: (String, @escaping (String) -> Void) async throws -> Brain.Turn
 
     private let notch: NotchViewModel
-    private let wake: WakeWordService
+    private let wake: any WakeSource
     private nonisolated(unsafe) let transcriber: Transcriber
     private let speech: SpeechOutput
     private let config: ConfigStore
@@ -92,8 +92,8 @@ public final class ConversationController: ObservableObject {
     private var pendingApproval: (request: ApprovalRequest, continuation: CheckedContinuation<Bool, Never>)?
     private var approvalTimeout: Task<Void, Never>?
 
-    public init(notch: NotchViewModel, wake: WakeWordService, transcriber: Transcriber,
-                speech: SpeechOutput, config: ConfigStore, modes: ModeManager, brain: Brain?) {
+    public init(notch: NotchViewModel, wake: any WakeSource, transcriber: Transcriber,
+                speech: SpeechOutput, config: ConfigStore, modes: ModeManager, brain: (any IntentEngine)?) {
         self.notch = notch
         self.wake = wake
         self.transcriber = transcriber
@@ -107,7 +107,7 @@ public final class ConversationController: ObservableObject {
             self.responder = { text, onText in
                 let t = "Heard you, \(name): “\(text)”."
                 onText(t)
-                return Brain.Turn(text: t)
+                return Reply(text: t)
             }
         }
         wake.onWake = { [weak self] date in self?.handleWake(at: date) }

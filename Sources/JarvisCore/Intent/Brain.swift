@@ -5,21 +5,11 @@ import Network
 /// Keeps a short conversation history that expires after a few idle minutes.
 @MainActor
 public final class Brain: ObservableObject {
-    public struct Turn {
-        public var text = ""
-        public var cards: [NotchCard] = []
-        public var toolCalls: [String] = []
-        public var inputTokens = 0
-        public var outputTokens = 0
-        public var cacheReadTokens = 0
-        public var cacheWriteTokens = 0
-        public var refused = false
-        /// "claude", "local", or "offline-matcher".
-        public var engine = "claude"
-    }
+    public typealias Turn = Reply
 
-    public let client: ClaudeClient
-    public let dispatcher: ToolDispatcher
+    /// The model and the action runner are interfaces, so the loop can be tested with scripted fakes.
+    public let client: any LanguageModel
+    public let dispatcher: any ActionRunner
     private let config: ConfigStore
     private let modes: ModeManager
     private let undo: UndoStack
@@ -50,7 +40,7 @@ public final class Brain: ObservableObject {
         Env.value("CLAUDE_MODEL").flatMap { $0.isEmpty ? nil : $0 } ?? config.profile.claude.model
     }
 
-    public init(client: ClaudeClient = ClaudeClient(), dispatcher: ToolDispatcher, config: ConfigStore, modes: ModeManager, undo: UndoStack) {
+    public init(client: any LanguageModel = ClaudeClient(), dispatcher: any ActionRunner, config: ConfigStore, modes: ModeManager, undo: UndoStack) {
         self.client = client
         self.dispatcher = dispatcher
         self.config = config
@@ -443,7 +433,7 @@ public final class Brain: ObservableObject {
 /// When there is no internet, a few commands still work by pattern matching.
 enum LocalFallback {
     @MainActor
-    static func handle(_ text: String, dispatcher: ToolDispatcher, modes: ModeManager) async throws -> String {
+    static func handle(_ text: String, dispatcher: any ActionRunner, modes: ModeManager) async throws -> String {
         let t = text.lowercased()
         func run(_ tool: String, _ input: JSONObject) async -> String {
             let r = await dispatcher.call(tool, input: input, source: .user)

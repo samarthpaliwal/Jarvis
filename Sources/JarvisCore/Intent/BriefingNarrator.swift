@@ -4,11 +4,11 @@ import Foundation
 /// Falls back to the template sentence when Claude is unreachable or slow.
 @MainActor
 public final class BriefingNarrator {
-    private let client: ClaudeClient
+    private let client: any LanguageModel
     private let config: ConfigStore
     private let world: WorldService
 
-    public init(client: ClaudeClient, config: ConfigStore, world: WorldService) {
+    public init(client: any LanguageModel, config: ConfigStore, world: WorldService) {
         self.client = client; self.config = config; self.world = world
     }
 

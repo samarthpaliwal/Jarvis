@@ -51,28 +51,62 @@ JARVIS_SIGN_IDENTITY="Jarvis Dev" scripts/run.sh
 (Or make it in Keychain Access → Certificate Assistant → Create a Certificate → name `Jarvis Dev`,
 type Code Signing.) Click "Always Allow" on the Keychain prompt the first time.
 
+## Architecture
+
+A request is five stages, each behind a small interface in
+[Pipeline/Stages.swift](Sources/JarvisCore/Pipeline/Stages.swift). Any stage can be replaced or tested alone.
+
+```
+ WakeSource ──▶ Transcriber ──▶ IntentEngine ──▶ ActionRunner ──▶ SpeechOutput
+  (heard)       (transcribed)     (intent)         (action)        (spoken)
+ openWakeWord   SpeechAnalyzer    Claude + tools   ToolDispatcher  Kokoro / Apple /
+                                  (Ollama offline) (tiers, denylist) ElevenLabs / OpenAI
+```
+
+`ConversationController` wires the stages together. It changes state only through one transition table,
+[Pipeline/PipelineMachine.swift](Sources/JarvisCore/Pipeline/PipelineMachine.swift):
+
+| State | Meaning | Leaves on |
+|-------|---------|-----------|
+| `idle` | waiting for the wake word | wake, typed text, an announcement |
+| `listening` | microphone to text | transcript, no speech, "thanks", echo dropped, recognizer failure |
+| `thinking` | Claude is deciding or tools are running | first sentence of the reply, an approval request |
+| `awaitingApproval` | a Tier 2 action waits for yes or no | yes, no, or timeout |
+| `speaking` | the reply is being spoken | reply finished, talking over it, the wake word |
+
+"Stop", the close button, and the menu return to `idle` from any state. A transition the table does not
+allow is logged as `Illegal transition` and counted. The tests run the whole pipeline on fakes in strict
+mode, where such a transition fails the turn.
+
+Each request carries one ID through all five stages; see [Logs and tracing](#logs-and-tracing).
+
 ## Project layout
 
 ```
 Sources/Jarvis/            Entry point (NSApplication boot)
+Sources/JarvisObjC/        Objective-C shim: NSException → Swift error
 Sources/JarvisCore/
-  App/                     AppDelegate, menu bar, mode manager, demo driver, debug hooks
-  Config/                  JSON models, locator, store
-  NotchUI/                 Panel, geometry, shape, SwiftUI views, view model
-  Logging/                 os_log + ~/Library/Logs/Jarvis/*.log
-  Wake/                    Mic capture (AVAudioEngine → 16 kHz) + openWakeWord on ONNX Runtime
+  Pipeline/                Stage interfaces, state machine, ConversationController (the orchestrator)
+  Wake/                    Stage 1: mic capture (AVAudioEngine → 16 kHz) + openWakeWord on ONNX Runtime
+  STT/                     Stage 2: Transcriber interface, SpeechAnalyzer + SFSpeechRecognizer, endpointer, echo guard
+  Intent/                  Stage 3: agent loop (Brain), streaming Claude client, Ollama client, system prompt
+  Actions/                 Stage 4: tiers, denylist guard, dispatcher, action log, undo stack
+  Actions/Tools/           One small file per tool
+  TTS/                     Stage 5: SpeechOutput interface, Apple / Kokoro / ElevenLabs / OpenAI engines, sentence chunker
+  App/                     AppDelegate (wiring), menu bar, mode manager, debug hooks
+  Config/                  JSON models, tuning and environment overrides, Keychain store
+  Logging/                 jarvis.log, trace.jsonl, request tracing
+  NotchUI/                 Panel, floating card, HUD, SwiftUI views, view model
+  Integrations/            EventKit calendar/reminders, Google OAuth + Gmail, Notion API, briefing, weather
+  Context/                 Signals (location, Wi-Fi, power, displays, calendar), mode scorer and setup
+  Proactive/               Scheduler (morning briefing, nudges, breaks, battery), call detection
+  Memory/  Skills/  Music/ Long-term memory, skills, Spotify and Music control
   Resources/Models/        melspectrogram / embedding / hey_jarvis ONNX models (Apache-2.0)
-  Speech/                  Transcriber protocol, SpeechAnalyzer (macOS 26) + SFSpeechRecognizer, endpointer, TTS
-  Brain/                   Keychain store, streaming Claude client, system prompt, agent loop, offline fallback
-  Permissions/             Tiers, tool protocol, denylist guard, dispatcher, action log, undo stack
-  Tools/                   One small file per tool (system, apps, volume, media, timers, files, shell, modes, undo, calendar, email, Notion, briefing)
-  Integrations/            EventKit calendar/reminders, Google OAuth + Gmail, Notion API, BriefingService
-  Context/                 Signals (location, Wi-Fi, power, displays, calendar), mode scorer, mode setup/restore, brightness
-  Proactive/               Scheduler (morning briefing, nudges, breaks, battery), call / screen-share detection
-Tests/JarvisCoreTests/     Unit tests
+Tests/JarvisCoreTests/     Unit tests (`swift test`)
 config/                    Default profile.json, allowed-folders.json, denylist.json, modes.json
-Resources/                 Info.plist, entitlements
-scripts/                   build-app.sh, run.sh
+voice/                     Kokoro speech server (Python)
+scripts/                   build-app.sh, run.sh, latency-report.py, setup scripts
+.env.example               Every environment override, documented
 ```
 
 ## Configuration
@@ -180,7 +214,7 @@ Models were downloaded from the openWakeWord v0.5.1 release and are checksummed 
 
 ## Speech in and out (Milestone 3)
 
-**Speech-to-text** sits behind the `Transcriber` protocol in `Speech/`:
+**Speech-to-text** sits behind the `Transcriber` protocol in `STT/`:
 
 - `AnalyzerSpeechTranscriber` — Apple's **SpeechAnalyzer** (macOS 26+). Fully on-device, needs only the
   microphone permission, downloads the English model once (~a minute on first run, logged).
@@ -478,7 +512,7 @@ The menu shows "Local model: … ready" once it's available.
 
 ## Safety model (enforced in code, Milestone 4)
 
-Every tool call goes through `ToolDispatcher` ([Permissions/ToolDispatcher.swift](Sources/JarvisCore/Permissions/ToolDispatcher.swift)), in this order:
+Every tool call goes through `ToolDispatcher` ([Actions/ToolDispatcher.swift](Sources/JarvisCore/Actions/ToolDispatcher.swift)), in this order:
 
 1. The tool must exist and not be **Tier 3** (refused outright, never offered to Claude).
 2. The tool declares what it will touch (paths, apps, shell text); the **denylist** checks all of it
@@ -507,7 +541,7 @@ Prompt-injection defence: `file_read` (and the email / web / calendar tools in M
 their output in `<untrusted_content source=…>` tags; the system prompt tells Claude such content is
 data, never instructions, and to tell you if it tried to be. Closing tags inside the content are neutralised.
 
-**Adding a tool** is one file in `Tools/`: conform to `JarvisTool` (name, description, tier, JSON
+**Adding a tool** is one file in `Actions/Tools/`: conform to `JarvisTool` (name, description, tier, JSON
 schema, `targets(for:)`, `run`), then add it to the `register([...])` list in `AppDelegate`.
 The dispatcher handles denylist, approval, logging, and the undo stack.
 
