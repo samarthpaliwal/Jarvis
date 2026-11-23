@@ -307,6 +307,31 @@ final class RemoteAPITests: XCTestCase {
         XCTAssertTrue(backend.asked.isEmpty)
     }
 
+    func testASiriShortcutSendsWordsAndGetsASentenceBack() async {
+        func plain(_ body: String, query: [String: String] = ["format": "text"]) async -> (status: Int, type: String, text: String) {
+            let r = HTTPRequest(method: "POST", path: "/v1/ask", query: query, headers: ["authorization": "Bearer \(token)", "content-type": "text/plain; charset=utf-8"], body: Data(body.utf8))
+            let response = await api.handle(r, from: "100.64.0.2")
+            return (response.status, response.headers["Content-Type"] ?? "", String(data: response.body, encoding: .utf8) ?? "")
+        }
+        var r = await plain("what's on today")
+        XCTAssertEqual(r.status, 200); XCTAssertTrue(r.type.hasPrefix("text/plain")); XCTAssertEqual(r.text, "Two classes and the gym.")
+        XCTAssertEqual(backend.asked.last?.text, "what's on today"); XCTAssertNil(backend.asked.last?.voice, "dictated by Siri: no voice to verify, so no approvals")
+        XCTAssertTrue(backend.rendered.isEmpty, "Siri does the speaking; no audio is made")
+        // Problems come back as something to say, not as an error the shortcut would choke on.
+        backend.result = RemoteTurnResult(status: .busy)
+        r = await plain("hello"); XCTAssertEqual(r.status, 200); XCTAssertTrue(r.text.contains("middle of something"))
+        r = await plain("   "); XCTAssertEqual(r.status, 200); XCTAssertEqual(r.text, "The text is empty.")
+        backend.result = RemoteTurnResult(status: .needsApproval, text: "Approve: Send an email? Say yes or no.", approvalID: UUID(), approvalPrompt: "Send an email", approvalExpiresIn: 60)
+        r = await plain("email maya"); XCTAssertTrue(r.text.contains("can't take through Siri"), r.text)
+        // Without the token it is still a plain 401.
+        let anonymous = api.precheck(HTTPRequest(method: "POST", path: "/v1/ask", query: ["format": "text"], headers: ["content-type": "text/plain", "content-length": "2"]), from: "100.64.0.3")
+        XCTAssertEqual(anonymous?.status, 401)
+        // The same body without format=text gets the usual JSON.
+        backend.result = RemoteTurnResult(status: .done, requestID: "r-1", text: "Hi.")
+        let json = await send(HTTPRequest(method: "POST", path: "/v1/ask", headers: ["authorization": "Bearer \(token)", "content-type": "text/plain"], body: Data("hello".utf8)))
+        XCTAssertEqual(json.body["text"] as? String, "Hi.")
+    }
+
     func testBusyAndFailures() async {
         backend.result = RemoteTurnResult(status: .busy)
         var r = await send(request("POST", "/v1/ask", json: ["text": "hello"]))

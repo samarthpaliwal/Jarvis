@@ -697,6 +697,24 @@ decoder. Pairing was also run in an iPhone simulator over the real `https://` ta
 mode was run for several turns against a simulated microphone. Not yet tried: a real phone's microphone,
 Add to Home Screen, and the service worker (the test browser does not run service workers).
 
+### "Hey Siri, Ask Jarvis"
+
+A Siri shortcut for when opening the app is too much: lock screen, AirPods, CarPlay, Watch.
+
+```bash
+scripts/make-siri-shortcut.sh        # writes build/Ask Jarvis.shortcut
+```
+
+1. Jarvis menu → *Remote Access* → *Create Access Token…*, name it `Siri`, *Copy and Close*.
+2. Double-click `build/Ask Jarvis.shortcut`, *Add Shortcut*, and paste the token when it asks.
+3. Say "Hey Siri, Ask Jarvis", then your request. iCloud copies the shortcut to your iPhone by itself.
+
+It dictates what you say (Apple's dictation, on the phone), sends the words to
+`POST /v1/ask?format=text` on your Mac over the tailnet, and speaks the plain-text reply. The file holds
+this Mac's tailnet address and no token. Because Siri sends words, not your voice, Jarvis cannot verify
+who is speaking: anything that needs approval is refused through Siri, and says so. The phone must be on
+Tailscale. Revoke the `Siri` token in the menu to switch it off.
+
 ### Later: a real app icon (Capacitor)
 
 Not built. The pieces are in place so that wrapping the same web app in a native shell is packaging, not

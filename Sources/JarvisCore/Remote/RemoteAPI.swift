@@ -137,7 +137,7 @@ public final class RemoteAPI: @unchecked Sendable {
         let response: HTTPResponse
         switch (request.method, request.path) {
         case ("GET", "/v1/status"): response = await status(device: device)
-        case ("POST", "/v1/ask"): response = await ask(request)
+        case ("POST", "/v1/ask"): response = Self.wantsPlainText(request) ? Self.plainText(await ask(request)) : await ask(request)
         case ("POST", "/v1/approve"): response = await approve(request)
         case (_, "/v1/status"), (_, "/v1/ask"), (_, "/v1/approve"): response = .error(405, "method_not_allowed", "That path does not take \(request.method).")
         default: response = .error(404, "not_found", "There is nothing at that path.")
@@ -170,7 +170,19 @@ public final class RemoteAPI: @unchecked Sendable {
                            "voice_id": s.voiceIDEnrolled, "mode": s.mode])
     }
 
+    /// `?format=text`: for clients that can only speak a string back (a Siri shortcut). The answer is the
+    /// reply as plain text, and a problem comes back as a sentence to say rather than as an error code.
+    static func wantsPlainText(_ request: HTTPRequest) -> Bool { request.query["format"]?.lowercased() == "text" }
+
+    static func plainText(_ response: HTTPResponse) -> HTTPResponse {
+        let body = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any] ?? [:]
+        var text = (body["text"] as? String) ?? (body["message"] as? String) ?? "Something went wrong."
+        if body["status"] as? String == "needs_approval" { text = "That needs your approval, which I can't take through Siri. Ask me in the Jarvis app instead." }
+        return HTTPResponse(status: 200, headers: ["Content-Type": "text/plain; charset=utf-8"], body: Data(text.utf8))
+    }
+
     private func wantsAudio(_ request: HTTPRequest, json: [String: Any]? = nil) -> Bool {
+        if Self.wantsPlainText(request) { return false }
         if let v = json?["audio"] as? Bool { return v }
         return !["0", "false", "no"].contains((request.query["audio"] ?? "1").lowercased())
     }
@@ -200,6 +212,10 @@ public final class RemoteAPI: @unchecked Sendable {
             }
             text = t
             speak = wantsAudio(request, json: json)
+        } else if request.contentType == "text/plain" || Self.wantsPlainText(request) {   // a shortcut may label its text body differently
+            // The words themselves as the body: the simplest thing for a shortcut to send.
+            guard let t = String(data: request.body, encoding: .utf8) else { return .error(400, "bad_request", "The text is not UTF-8.") }
+            text = t
         } else {
             let samples: [Float]
             switch decodeAudio(request) {
