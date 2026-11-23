@@ -1,5 +1,19 @@
 # Changelog
 
+### 0.17.0 — Owner lock: face recognition (2026-11-23)
+- **Personal features only open for the owner's face.** Email, calendar, files, notes, contacts, memory,
+  briefings, shell and computer control are refused unless the camera sees the enrolled face. Music, lights,
+  timers, weather and web questions keep working for anyone.
+- **Three states** (owner present, unknown person, no face) plus a 60 s "stepped away" allowance; every
+  change is written to `~/Library/Logs/Jarvis/face.log`.
+- **On-device only:** Apple Vision finds the face, the SFace model (38.7 MB, Apache 2.0) measures it. About
+  25 pictures are measured at setup and thrown away; only the numbers are kept, AES-256-GCM encrypted, key in
+  the Keychain behind Touch ID.
+- **Liveness:** a blink or a small head turn is required, so a printed photo is not accepted.
+- **Fails closed:** a camera, model, key or file error locks. **Touch ID** is the manual override (10 min).
+- An unverified speaker is answered as a guest: no memory, no earlier conversation, no profile facts.
+- Off until a face is enrolled. Requests from the paired phone skip the face check.
+
 ### 0.16.0 — Faster speech (2026-11-23)
 - **One speed for every voice:** `assistant.speechSpeed` in `profile.json` (1.0 natural, default 1.3, range
   0.7 to 2.0) drives Kokoro, ElevenLabs, OpenAI and the Apple voice. It replaces three separate knobs.

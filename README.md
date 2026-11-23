@@ -16,7 +16,7 @@ enforced in code.
 
 - **Hands-free.** On-device wake word, on-device speech recognition, a natural on-device voice (Kokoro).
   Follow-up questions without repeating the wake word.
-- **Gets things done.** 48 tools behind one dispatcher: calendar and reminders, Gmail, Notion, Spotify and
+- **Gets things done.** 49 tools behind one dispatcher: calendar and reminders, Gmail, Notion, Spotify and
   Apple Music, files, apps, the screen and the camera, web search. Multi-step requests chain tools.
 - **Asks before anything risky.** Sending, deleting, shell commands and anything involving money need a
   spoken "yes" or a tap, in your voice. Keys, passwords, `~/.ssh` and anything on the denylist are refused
@@ -48,7 +48,7 @@ flowchart LR
         intent --> actions["4 · Actions<br/>ToolDispatcher"]
         actions --> guard{"Tier · denylist<br/>approval"}
         voiceid --> guard
-        guard --> tools["48 tools"]
+        guard --> tools["49 tools"]
         tools --> intent
         intent --> tts["5 · Text to speech<br/>Kokoro"]
     end
@@ -95,6 +95,7 @@ Optional, each one command or one menu item:
 |---|---|
 | A natural on-device voice | `scripts/setup-kokoro.sh` |
 | Voice ID | `scripts/setup-voiceid.sh`, then menu → Voice ID → Set Up |
+| Owner lock (face) | `scripts/setup-faceid.sh`, then menu → Owner Lock → Set Up Face Recognition, or say "set up face recognition" |
 | Keep it running, start at login | `scripts/install-agent.sh` |
 | Gmail, Notion, Spotify | menu → Integrations |
 | Your phone | [docs/remote-access.md](docs/remote-access.md) |

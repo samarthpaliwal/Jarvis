@@ -2,6 +2,53 @@ import Foundation
 
 // MARK: - profile.json
 
+/// Face recognition and the owner lock. Missing values take the defaults below.
+public struct FaceConfig: Codable, Equatable, Sendable {
+    /// The lock is on. Only has an effect once a face is enrolled.
+    public var enabled = false
+    /// How alike a face must be to the enrolled one (-1…1). Higher is stricter. SFace's published
+    /// same-person figure is 0.363; the default sits above it to err toward rejecting.
+    public var threshold = 0.45
+    /// With no face in view, personal features stay open this long after the owner was last seen.
+    public var noFaceTimeoutSeconds = 60.0
+    /// Require a blink or a small head turn, so a photo is not accepted.
+    public var requireLiveness = true
+    /// Camera pictures looked at per second while a conversation is open.
+    public var framesPerSecond = 6.0
+    /// How long a request waits for the face check before it is refused.
+    public var decisionSeconds = 4.0
+    /// How long a Touch ID unlock lasts.
+    public var overrideMinutes = 10.0
+
+    public init() {}
+    private enum CodingKeys: String, CodingKey { case enabled, threshold, noFaceTimeoutSeconds, requireLiveness, framesPerSecond, decisionSeconds, overrideMinutes }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? enabled
+        threshold = try c.decodeIfPresent(Double.self, forKey: .threshold) ?? threshold
+        noFaceTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .noFaceTimeoutSeconds) ?? noFaceTimeoutSeconds
+        requireLiveness = try c.decodeIfPresent(Bool.self, forKey: .requireLiveness) ?? requireLiveness
+        framesPerSecond = try c.decodeIfPresent(Double.self, forKey: .framesPerSecond) ?? framesPerSecond
+        decisionSeconds = try c.decodeIfPresent(Double.self, forKey: .decisionSeconds) ?? decisionSeconds
+        overrideMinutes = try c.decodeIfPresent(Double.self, forKey: .overrideMinutes) ?? overrideMinutes
+    }
+
+    public var presence: OwnerPresence.Settings {
+        var s = OwnerPresence.Settings()
+        s.threshold = min(0.95, max(0.3, threshold))
+        s.noFaceTimeout = max(0, noFaceTimeoutSeconds)
+        s.requireLiveness = requireLiveness
+        return s
+    }
+    public var lock: OwnerLock.Settings {
+        var s = OwnerLock.Settings()
+        s.enabled = enabled
+        s.decisionSeconds = min(15, max(1, decisionSeconds))
+        s.overrideMinutes = min(120, max(1, overrideMinutes))
+        return s
+    }
+}
+
 /// Personal facts about the user. Everything here is editable in config/profile.json.
 public struct Profile: Codable, Equatable {
     public struct Routine: Codable, Equatable {
@@ -304,6 +351,7 @@ public struct Profile: Codable, Equatable {
     public var world: World?
     public var local: Local?
     public var memory: MemoryConfig?
+    public var face: FaceConfig?
     public var ui: UI?
     public var voice: Voice?
     public var web: Web?
@@ -363,7 +411,8 @@ public struct Denylist: Codable, Equatable, Sendable {
     /// The hard floor: even if denylist.json is deleted, these stay denied.
     public static let fallback = Denylist(
         paths: ["~/.ssh", "~/Library/Keychains", "~/.aws", "~/.gnupg", "/System", "/Library", "/private", "/etc", "/usr",
-                "~/Library/Application Support/Jarvis/voiceprint",    // biometric: no tool may read it
+                "~/Library/Application Support/Jarvis/voiceprint",
+                "~/Library/Application Support/Jarvis/faceprint",     // biometric: no tool may read it    // biometric: no tool may read it
                 "~/Library/Application Support/Jarvis/remote",        // remote access tokens (hashes)
                 "~/Library/Application Support/Jarvis/bin"],          // the key helper: no tool may replace it
         filePatterns: [".env", ".env.*", "*.pem", "*.key", "id_rsa*", "id_ed25519*", "credentials.json"],

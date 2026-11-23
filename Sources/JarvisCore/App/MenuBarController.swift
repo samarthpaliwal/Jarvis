@@ -34,6 +34,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     /// Set by the app; adds the Keys submenu.
     public weak var keys: AppDelegate?
     public var onEnrollVoice: (() -> Void)?
+    /// Set by the app; adds the Owner Lock submenu (face recognition).
+    public weak var ownerLockApp: AppDelegate?
     private let googleAuth: GoogleAuth
     private let notion: NotionClient
     private let briefing: BriefingService
@@ -391,6 +393,59 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
                 notch.flash("Voiceprint deleted. Voice ID is off.", seconds: 4)
             }
             forget.isEnabled = enrolled != nil
+            sub.addItem(forget)
+            item.submenu = sub
+            menu.addItem(item)
+        }
+        if let app = ownerLockApp, let lock = app.ownerLock {
+            let enrolled = app.faceStore.exists
+            let item = NSMenuItem(title: "Owner Lock", action: nil, keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: lock.isActive ? "lock.shield" : "faceid", accessibilityDescription: nil)
+            let sub = NSMenu()
+            let status = NSMenuItem(title: app.ownerLockStatus(), action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            sub.addItem(status)
+            sub.addItem(.separator())
+            // Everything that opens or changes the lock asks for Touch ID first.
+            let unlock = ClosureMenuItem(title: "Unlock with Touch ID", symbol: "touchid") { [notch] in
+                Task { @MainActor in
+                    let ok = await lock.unlockWithTouchID()
+                    notch.flash(ok ? "Unlocked for \(Int(lock.settings().overrideMinutes)) minutes." : "Touch ID was not confirmed. Still locked.", seconds: 4)
+                }
+            }
+            unlock.isEnabled = lock.isActive && !lock.overrideActive
+            sub.addItem(unlock)
+            let lockNow = ClosureMenuItem(title: "Lock Now", symbol: "lock") { [notch] in lock.lockNow(); notch.flash("Locked.", seconds: 3) }
+            lockNow.isEnabled = lock.isActive
+            sub.addItem(lockNow)
+            sub.addItem(.separator())
+            let toggle = ClosureMenuItem(title: "Require My Face for Personal Data", symbol: "person.badge.shield.checkmark") { [notch] in
+                Task { @MainActor in
+                    let turnOn = !lock.settings().enabled
+                    if !turnOn, !(await lock.confirmOwner("turn Jarvis's owner lock off")) { notch.flash("Touch ID was not confirmed. The lock stays on.", seconds: 4); return }
+                    do { try app.config.save(faceLockEnabled: turnOn); notch.flash("Owner lock \(turnOn ? "on" : "off").", seconds: 3) }
+                    catch { notch.flash("Could not save that: \(error.localizedDescription)", seconds: 5) }
+                }
+            }
+            toggle.state = lock.settings().enabled ? .on : .off
+            toggle.isEnabled = enrolled
+            sub.addItem(toggle)
+            let setup = ClosureMenuItem(title: enrolled ? "Redo Face Setup…" : "Set Up Face Recognition…", symbol: "faceid") { [notch] in
+                Task { @MainActor in
+                    guard SFaceEmbedder.isInstalled else { notch.flash("The face model is not installed. Run scripts/setup-faceid.sh.", seconds: 6); return }
+                    guard await lock.confirmOwner("set up face recognition for Jarvis") else { notch.flash("Touch ID was not confirmed. Nothing changed.", seconds: 4); return }
+                    app.startFaceEnrollment()
+                }
+            }
+            sub.addItem(setup)
+            let forget = ClosureMenuItem(title: "Forget My Face", symbol: "trash") { [notch] in
+                Task { @MainActor in
+                    guard await lock.confirmOwner("delete the saved face and turn the owner lock off") else { notch.flash("Touch ID was not confirmed. Nothing changed.", seconds: 4); return }
+                    do { try app.forgetFace(); notch.flash("Face data deleted. The owner lock is off.", seconds: 4) }
+                    catch { notch.flash("Could not finish: \(error.localizedDescription)", seconds: 5) }
+                }
+            }
+            forget.isEnabled = enrolled
             sub.addItem(forget)
             item.submenu = sub
             menu.addItem(item)

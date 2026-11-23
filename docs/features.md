@@ -594,3 +594,34 @@ Jarvis talks about 30% faster than each voice's natural pace. The one setting is
 
 Replies were already spoken sentence by sentence as they arrive, so the first sentence starts while the rest
 is still being written.
+
+## Owner lock (face recognition)
+
+Jarvis only uses your email, calendar, files, notes and memory while the camera sees your face. Details,
+limits and the threat model are in [privacy and security](privacy-and-security.md#owner-lock-your-face-opens-your-data).
+
+**Set up (once):** `scripts/setup-faceid.sh` installs the model. Then say "set up face recognition" or choose
+menu → Owner Lock → Set Up Face Recognition…, confirm with Touch ID, and follow five spoken steps (straight,
+left, right, chin up, chin down). It takes about 40 seconds and switches the lock on.
+
+| Say | What happens |
+| --- | --- |
+| "Set up face recognition" | Touch ID, then the guided setup |
+| "Is the owner lock on?" / "Who do you see?" | the state, the last score, and why a check failed |
+| "Unlock with Touch ID" | opens the lock for 10 minutes |
+| "Lock now" | closes it again |
+| "Turn the owner lock off" / "on" | off needs Touch ID |
+| "Forget my face" | Touch ID, then deletes the saved face and turns the lock off |
+
+Settings are in the `face` section of `profile.json` (threshold, timeout, liveness, override length), each
+explained in the comment there. State changes are logged to `~/Library/Logs/Jarvis/face.log`.
+
+**Manual test checklist**
+1. Set up your face. Ask "what's on my calendar?" while looking at the Mac: it answers.
+2. Cover the camera with your hand and ask again within a minute: still answers (stepped-away allowance).
+   Wait over a minute, ask again: "the camera cannot see a face".
+3. Have someone else ask for your email: refused. They ask for the weather: answered.
+4. Hold a photo of yourself to the camera, with your own face out of view, and ask for your calendar: refused.
+5. With the camera covered, say "unlock with Touch ID", touch the sensor, ask again: answers. Say "lock now".
+6. Open `~/Library/Logs/Jarvis/face.log` and check each step left a line.
+

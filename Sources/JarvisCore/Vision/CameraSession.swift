@@ -135,7 +135,17 @@ public final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
     }
 
+    /// Lets one named watcher see every frame while the camera runs (the face check). Pass nil to stop.
+    /// The closure runs on the camera queue: it must be quick and must not keep the buffer.
+    public func setFrameTap(_ name: String, _ tap: ((CVPixelBuffer) -> Void)?) {
+        queue.async { [self] in taps[name] = tap }
+    }
+    private var taps: [String: (CVPixelBuffer) -> Void] = [:]
+
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        if !taps.isEmpty, output === videoOutput, let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) {
+            for tap in taps.values { tap(pixels) }
+        }
         guard var g = grab else { return }
         if g.skip > 0 { g.skip -= 1; grab = g; return }
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }

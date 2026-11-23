@@ -761,6 +761,8 @@ public final class ConversationController: ObservableObject {
         var waiter: CheckedContinuation<RemoteTurnResult, Never>?
     }
     private var remote: RemoteTurn?
+    /// True while the request being answered came from the paired phone, not the Mac's microphone.
+    public var isRemoteTurn: Bool { remote != nil }
 
     private func respondRemote(to text: String) async {
         lastUserText = text

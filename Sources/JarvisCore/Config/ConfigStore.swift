@@ -44,21 +44,34 @@ public final class ConfigStore: ObservableObject {
         JarvisLog.info("Config loaded from \(directory.path)" + (errs.isEmpty ? "" : " with errors: \(errs.joined(separator: "; "))"))
     }
 
-    /// Saves how fast Jarvis talks into profile.json and applies it at once. Only that one value is
-    /// rewritten; every other key and comment in the file stays as it was.
+    /// Saves how fast Jarvis talks into profile.json and applies it at once.
     public func save(speechSpeed: Double) throws {
         let speed = SpeechPace.clamp(speechSpeed)
-        let url = directory.appendingPathComponent("profile.json")
-        // A file that is missing or cannot be read is never replaced with a stub.
-        guard var root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
-              var assistant = root["assistant"] as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
-        assistant["speechSpeed"] = speed
-        root["assistant"] = assistant
-        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        try data.write(to: url, options: .atomic)
+        try saveProfileValue(speed, section: "assistant", key: "speechSpeed")
         profile.assistant.speechSpeed = speed
         SpeechPace.current = speed
         JarvisLog.info("Speech speed saved: \(speed)")
+    }
+
+    /// Switches the owner lock on or off in profile.json.
+    public func save(faceLockEnabled: Bool) throws {
+        try saveProfileValue(faceLockEnabled, section: "face", key: "enabled")
+        var face = profile.face ?? FaceConfig()
+        face.enabled = faceLockEnabled
+        profile.face = face
+        JarvisLog.info("Owner lock \(faceLockEnabled ? "on" : "off")")
+    }
+
+    /// Rewrites one value in profile.json; every other key and comment in the file stays as it was.
+    /// A file that is missing or cannot be read is never replaced with a stub.
+    private func saveProfileValue(_ value: Any, section: String, key: String) throws {
+        let url = directory.appendingPathComponent("profile.json")
+        guard var root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+        var part = root[section] as? [String: Any] ?? [:]
+        part[key] = value
+        root[section] = part
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try data.write(to: url, options: .atomic)
     }
 
     /// Writes modes.json (places learned by voice) and reloads.

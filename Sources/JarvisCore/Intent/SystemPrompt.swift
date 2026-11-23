@@ -4,14 +4,16 @@ import Foundation
 public enum SystemPrompt {
     /// (stable, volatile): the stable part is byte-identical across turns so the API can cache it.
     public static func parts(profile: Profile, mode: ModeDefinition, now: Date = Date(), online: Bool = true,
-                             undoAvailable: String? = nil) -> (stable: String, volatile: String) {
-        let full = build(profile: profile, mode: mode, now: now, online: online, undoAvailable: undoAvailable)
+                             undoAvailable: String? = nil, guest: Bool = false) -> (stable: String, volatile: String) {
+        let full = build(profile: profile, mode: mode, now: now, online: online, undoAvailable: undoAvailable, guest: guest)
         guard let r = full.range(of: "\n\nCurrent mode:") else { return (full, "") }
         return (String(full[..<r.lowerBound]), String(full[r.lowerBound...]).trimmingCharacters(in: .newlines))
     }
 
+    /// `guest`: the owner lock could not confirm the owner is at the Mac. Personal facts are left out and
+    /// the model is told to answer general questions only.
     public static func build(profile: Profile, mode: ModeDefinition, now: Date = Date(), online: Bool = true,
-                             undoAvailable: String? = nil) -> String {
+                             undoAvailable: String? = nil, guest: Bool = false) -> String {
         let tz = TimeZone(identifier: profile.homeTimeZone) ?? .current
         let f = DateFormatter()
         f.timeZone = tz
@@ -32,11 +34,15 @@ public enum SystemPrompt {
         Use "sir" at most once per reply, never every sentence; that would be parody, not JARVIS.
         """
         }
+        if !guest {
         p += """
 
         About \(a.addressUserAs): CS student at \(profile.school) in \(profile.city), graduating \(profile.graduationYear), \
         working toward a \(profile.goal). Bikes everywhere, works out \(profile.routine.workoutStart)–\(profile.routine.workoutEnd), \
         splits time between \(profile.city) and Singapore (\(profile.secondaryTimeZone)).
+        """
+        }
+        p += """
 
         How to answer:
         - Your replies are spoken aloud. Keep them to \(a.spokenReplyMaxSentences) sentences unless asked for detail. \
@@ -88,6 +94,17 @@ public enum SystemPrompt {
         - sudo is never available.
         """
         p += "\n\nCurrent mode: \(mode.name) (\(mode.id)). Voice replies \(mode.voice.enabled ? "on" : "off; replies are shown as text only, so you may be a little more complete")."
+        if guest {
+            p += """
+
+
+        OWNER LOCK: the system could not confirm that \(a.addressUserAs) is the person at the Mac right now. Treat the speaker \
+        as a guest. Answer general questions, search the web, and control music, lights, volume and timers as usual. Do not \
+        reveal or guess anything personal about \(a.addressUserAs): email, messages, calendar, files, notes, contacts, memory, \
+        location, schedule, or earlier conversations. Personal tools will answer "Locked"; when one does, say in one short \
+        sentence which check failed and that Touch ID unlocks it, then stop. Do not try another route.
+        """
+        }
         if mode.id == "class" { p += " \(a.addressUserAs) is in class: be brief and quiet." }
         if !online { p += "\n\nThe Mac is offline right now. Only local tools work; say so if something needs the internet." }
         if let u = undoAvailable { p += "\n\nLast undoable action: \(u)." }

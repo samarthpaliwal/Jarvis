@@ -64,7 +64,7 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 |------|-----------|-------------|
 | 0 automatic | read-only, runs on Anthropic's side | `web_search`, `web_fetch` |
 | 0 automatic | read-only | `system_status`, `file_search`, `file_read`, `get_location_context`, `actions_today`, `get_briefing`, `calendar_read`, `email_search`, `email_read`, `notion_search` |
-| 1 free | reversible, logged, undoable | `open_app`, `google_search`, `open_website`, `lights`, `computer` (its own gates, see features), `set_volume`, `speech_speed`, `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
+| 1 free | reversible, logged, undoable | `open_app`, `google_search`, `open_website`, `lights`, `computer` (its own gates, see features), `set_volume`, `speech_speed`, `owner_lock` (asks for Touch ID itself), `media_control`, `set_timer`, `set_mode`, `undo_last_action`, `calendar_create`, `set_reminder`, `email_draft`, `notion_create_note` |
 | 1 free (cont.) | | `set_brightness`, `set_focus`, `remember_place`, `organize_folder` |
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
 | 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
@@ -131,6 +131,58 @@ Keychain directly as it used to, once per key per launch. Unit tests never touch
 
 Why not the Keychain's built-in Touch ID protection? That needs an entitlement only an Apple Developer
 team signature can carry; with a self-signed certificate macOS answers `-34018`.
+
+## Owner lock: your face opens your data
+
+Off until you enroll a face. Once on, Jarvis uses your personal data only while the Mac's camera sees you.
+
+**The three states**
+
+| The camera sees | What works |
+| --- | --- |
+| You (owner present) | Everything. |
+| Someone else (unknown person) | General questions, web search, music, lights, volume, timers, weather, opening apps and sites. Email, messages, calendar, files, notes, contacts, memory, briefings, reminders, shell commands and computer control are refused, and Jarvis says the face check failed. |
+| Nobody (no face visible) | The same as "unknown", except for the first 60 seconds after you were last seen (`noFaceTimeoutSeconds`), so stepping out of frame mid-request does not lock you out. A stranger appearing ends that allowance at once. |
+
+An unverified speaker is also answered as a guest: the request is sent without your memory, without earlier
+conversation and without the facts about you in the prompt, and nothing they say is saved to your memory.
+
+**When it looks.** The camera turns on when the wake word fires and stays on, checking about six pictures a
+second, until the conversation ends. The green camera light is on for that time. A briefing or timer that wants
+to use personal data switches the camera on for a few seconds first.
+
+**What is stored.** Setup measures about 25 pictures of your face at five angles and throws the pictures away
+as it goes. Only the measurements (128 numbers per picture) are kept, in
+`~/Library/Application Support/Jarvis/faceprint/face.bin`, encrypted with AES-256-GCM. The key is in the
+Keychain behind Touch ID with the API keys; without it the file is noise. No tool can read that folder
+(it is on the built-in denylist). Nothing about your face is sent anywhere: Apple's Vision framework finds
+the face and the SFace model (OpenCV model zoo, Apache 2.0) measures it, both on this Mac.
+
+**Erring toward "no".** A face must score 0.45 or more (SFace's published same-person figure is 0.363),
+twice in a row, and show a sign of life. Any failure (camera busy or missing, model missing, key locked,
+file damaged) locks instead of unlocking.
+
+**Liveness, and its limits.** Before a matching face counts, Jarvis needs to see a blink, or the nose move
+along the eye line the way it only does on a real, three-dimensional head. That stops a printed photo and a
+still picture on a phone. It does not stop:
+- a video of you blinking or turning your head, played on a screen;
+- a realistic mask or a very close look-alike (an identical twin will pass);
+- anyone who can already use the Mac by hand: the lock guards Jarvis, not the Mac itself.
+An ordinary webcam has no depth sensor, so this is a deterrent, not Face ID.
+
+**The override, and how it could be abused.** "Unlock with Touch ID" (voice or menu → Owner Lock) opens the
+lock for 10 minutes (`overrideMinutes`) when the camera cannot do its job. It accepts fingerprints only, not
+the Mac's password. So it can be abused by anyone whose fingerprint is registered on this Mac, and by anyone
+who gets you to touch the sensor; during those 10 minutes anybody at the Mac has full access, so say "lock
+now" if you walk away. Setting up or redoing the face, deleting it, and switching the lock off all ask for
+Touch ID too, so a stranger cannot enroll their own face.
+
+**Requests from the paired phone** skip the face check: nobody is at the Mac's camera, and the phone is
+already tied to you by pairing.
+
+**Debugging a false reject.** `~/Library/Logs/Jarvis/face.log` has one line per change of state with the
+time, the score and the reason (for example `unknown score=0.41 best score 0.41 is under 0.45`). It never
+contains pictures or face measurements.
 
 ## Voice ID: checking it is you
 

@@ -274,5 +274,15 @@
     "webSearchPerCall": 0.01,
     "elevenLabsPer1kChars": 0.1,
     "openAIPer1kChars": 0.015
+  },
+  "face": {
+    "_comment": "Face recognition and the owner lock. enabled: the lock is on (set by the face setup; only works once a face is enrolled). threshold: how alike a face must be to yours, higher is stricter (0.45 default; raise it if someone else is ever accepted, lower it a little if you are often rejected; see ~/Library/Logs/Jarvis/face.log for your scores). noFaceTimeoutSeconds: with no face in view, personal features stay open this long after you were last seen. requireLiveness: need a blink or a small head turn, so a photo is not accepted. framesPerSecond: camera pictures checked per second during a conversation. decisionSeconds: how long a request waits for the face check before it is refused. overrideMinutes: how long a Touch ID unlock lasts.",
+    "enabled": false,
+    "threshold": 0.45,
+    "noFaceTimeoutSeconds": 60,
+    "requireLiveness": true,
+    "framesPerSecond": 6,
+    "decisionSeconds": 4,
+    "overrideMinutes": 10
   }
 }

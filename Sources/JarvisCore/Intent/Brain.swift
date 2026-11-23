@@ -133,7 +133,15 @@ public final class Brain: ObservableObject {
         }
     }
 
+    /// The owner lock's answer to "must personal context be kept out of this request?". Nil: no lock.
+    public var personalDataLocked: (() async -> Bool)?
+    /// True while the request being answered is from someone the lock could not confirm as the owner.
+    private var guestTurn = false
+
     private func respondOnce(to userText: String, onText: @escaping (String) -> Void) async throws -> Turn {
+        let guest = await personalDataLocked?() ?? false
+        guestTurn = guest
+        if guest { JarvisLog.info("Owner lock: answering as a guest (no memory, no earlier conversation)") }
         if Date().timeIntervalSince(lastActivity) > historyTimeout { history.removeAll(); session.closeChat() }
         session.keepMinutes = config.tuning.sessionMemoryMinutes
         session.maxExchanges = config.tuning.sessionMemoryExchanges
@@ -160,26 +168,31 @@ public final class Brain: ObservableObject {
 
         generation += 1
         let myGeneration = generation
-        var convo = Self.trimmed(Self.sanitized(history) + [["role": "user", "content": userText]], max: maxHistoryMessages)
+        // A guest gets no earlier conversation, and what a guest says is not added to the owner's.
+        var convo = guest ? [["role": "user", "content": userText] as JSONObject]
+                          : Self.trimmed(Self.sanitized(history) + [["role": "user", "content": userText]], max: maxHistoryMessages)
         defer {
             // A newer turn may have started while this one awaited the network or a tool; only the
             // latest turn writes history, and always as a complete tool_use/tool_result sequence.
             // Keep only the newest picture: each one costs tokens on every later request.
-            if myGeneration == generation { history = Self.keepingLatestImages(Self.sanitized(convo), count: 1) }
+            if myGeneration == generation, !guest { history = Self.keepingLatestImages(Self.sanitized(convo), count: 1) }
         }
         let mode = modes.current
-        var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
+        var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline,
+                                                    undoAvailable: guest ? nil : undo.lastDescription, guest: guest)
         if let catalog = skills?.catalog { stable += "\n\n" + catalog }          // changes only when skills are installed
-        if config.profile.memory?.enabled ?? true, let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
+        if !guest, config.profile.memory?.enabled ?? true, let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
         // Short-term: what was said in chats that already closed. It rides in the uncached part of the prompt.
-        if let recent = session.promptBlock() { volatile = recent + "\n\n" + volatile }
+        if !guest, let recent = session.promptBlock() { volatile = recent + "\n\n" + volatile }
         // Web tools first so the cache breakpoint stays on the last custom tool.
         let tools = Self.webTools(model: model, profile: config.profile, mode: mode, fetchMaxContentTokens: config.tuning.webFetchMaxContentTokens)
             + dispatcher.definitions(for: mode)
         var guardian = LoopGuard(budget: config.tuning.toolCallBudgetPerTurn)
         defer {
-            if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
-            if !turn.text.isEmpty { session.note(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
+            if !guest {
+                if config.profile.memory?.archiveConversations ?? true { memory?.archive(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
+                if !turn.text.isEmpty { session.note(user: userText, jarvis: turn.text, tools: turn.toolCalls) }
+            }
         }
 
         for round in 0...maxToolRounds {
@@ -413,8 +426,10 @@ public final class Brain: ObservableObject {
         var turn = Turn()
         turn.engine = "local"
         let mode = modes.current
-        var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
-        if let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
+        let guest = guestTurn
+        var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline,
+                                                    undoAvailable: guest ? nil : undo.lastDescription, guest: guest)
+        if !guest, let block = memory?.promptBlock() { volatile = block + "\n\n" + volatile }
         if hosted {
             stable += "\n\nYou have no web search and cannot see images in this session. If a request needs either, say so in one sentence."
         } else {
@@ -423,7 +438,7 @@ public final class Brain: ObservableObject {
         }
         var messages: [JSONObject] = [["role": "system", "content": stable + "\n\n" + volatile]]
         // Carry over the last few plain-text exchanges from the cloud history.
-        for m in history.suffix(6) {
+        for m in (guest ? [] : history.suffix(6)) {
             guard let role = m["role"] as? String else { continue }
             if let s = m["content"] as? String { messages.append(["role": role, "content": s]); continue }
             let text = (m["content"] as? [JSONObject] ?? []).compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined()

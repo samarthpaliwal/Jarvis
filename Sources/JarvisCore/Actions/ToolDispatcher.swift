@@ -42,6 +42,9 @@ public final class ToolDispatcher {
     public var approvalHandler: ((ApprovalRequest) async -> Bool)?
     /// "Ask once per chat" (menu toggle). See ApprovalSession for what it never covers.
     public var approvalSession = ApprovalSession.saved()
+    /// The owner lock: a sentence saying why this tool may not run right now, or nil to go ahead.
+    /// Arguments: the tool's name, and whether the request came from the paired phone.
+    public var ownerGate: ((String, Bool) async -> String?)?
     private var askedFromPhone: Bool { RequestTrace.current?.source == "remote" }
     var now: () -> Date = Date.init
 
@@ -151,6 +154,11 @@ public final class ToolDispatcher {
         if tool.userOnly, source != .user {
             record("refused", tier: tool.tier, summary: "user-only tool from \(source.rawValue)")
             return .error("\(name) only runs when Sam asks for it directly.")
+        }
+        // Personal tools need the owner at the Mac. Checked before any approval is asked for.
+        if let why = await ownerGate?(name, askedFromPhone) {
+            record("locked", tier: tool.tier, summary: String(why.prefix(120)))
+            return .error(why)
         }
         let mode = context.modes.current
         guard Self.allowed(name, in: mode) else {

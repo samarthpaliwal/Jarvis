@@ -50,6 +50,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var frames: FrameSources!
     public private(set) var camera: CameraController!
     public private(set) var voiceID: SpeakerVerifier!
+    public private(set) var faceWatcher: FaceWatcher!
+    public private(set) var faceStore: FaceTemplateStore!
+    public private(set) var ownerLock: OwnerLock!
+    private var faceEnrollmentPending = false
     private var enrollmentPending = false
     public private(set) var glasses: PushedFrameSource!
     private var termSource: DispatchSourceSignal?
@@ -237,6 +241,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         camera.maxRecordingSeconds = { [weak self] in self?.config.tuning.videoMaxSeconds ?? 300 }
         camera.onNotice = { [weak self] text in self?.conversation?.announceWhenIdle(text) }
         frames = FrameSources([CameraFrameSource(session: camera.session), glasses], default: "camera")
+        // Face recognition and the owner lock. Nothing here touches the camera until a face is enrolled
+        // and the lock is on; the model is read from disk the first time it is needed.
+        faceStore = FaceTemplateStore()
+        let faceCamera = LiveFaceCamera(session: camera.session)
+        faceCamera.framesPerSecond = min(15, max(2, config.profile.face?.framesPerSecond ?? 6))
+        let faceModel = LazySFaceEmbedder()
+        let store = faceStore!
+        faceWatcher = FaceWatcher(camera: faceCamera, embedder: { try faceModel.get() }, template: { try store.load() })
+        ownerLock = OwnerLock(watcher: faceWatcher, settings: { [config] in config!.profile.face?.lock ?? OwnerLock.Settings() },
+                              isEnrolled: { store.exists })
+        dispatcher.ownerGate = { [weak self] tool, fromPhone in await self?.ownerLock.refusal(tool: tool, fromPhone: fromPhone) }
+        JarvisLog.info("Owner lock: " + (!SFaceEmbedder.isInstalled ? "face model not installed (scripts/setup-faceid.sh)"
+                                         : !store.exists ? "no face enrolled" : ownerLock.isActive ? "on" : "face enrolled, lock off"))
         // A page that opens under the full-screen HUD cannot be seen, so the HUD steps aside first.
         let openInBrowser: @MainActor (URL) -> Bool = { [weak self] url in
             self?.hud?.stepAside(reason: "browser")
@@ -254,6 +271,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),
             MemoryTool(store: memory), MemorySearchTool(store: memory), WeatherTool(world: world), NewsHeadlinesTool(world: world),
             UseSkillTool(library: skills), ContactsTool(book: contacts), LookTool(sources: frames), CameraTool(camera: camera),
+            OwnerLockTool(lock: ownerLock, hooks: .init(
+                status: { [weak self] in self?.ownerLockStatus() ?? "The owner lock is not available." },
+                isEnrolled: { store.exists }, modelInstalled: { SFaceEmbedder.isInstalled },
+                startEnrollment: { [weak self] in self?.startFaceEnrollment() },
+                forget: { [weak self] in try self?.forgetFace() },
+                setEnabled: { [config] in try config!.save(faceLockEnabled: $0) })),
             VoiceIDTool(verifier: voiceID, lastCheck: { [weak self] in self?.conversation?.lastVoiceCheck },
                         startEnrollment: { [weak self] in self?.startVoiceEnrollment() }),
         ])
@@ -284,6 +307,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
         conversation.onFirstWord = { [weak self] in self?.brain.prewarmIfCold() }
         conversation.voiceID = voiceID
+        brain.personalDataLocked = { [weak self] in
+            await self?.ownerLock.personalDataLocked(fromPhone: RequestTrace.current?.source == "remote") ?? false
+        }
+        // The camera looks for the owner from the wake word until the conversation ends. Requests from
+        // the phone do not switch it on: nobody is sitting at the Mac.
+        conversation.$state.map { $0 != .idle }.removeDuplicates().sink { [weak self] talking in
+            guard let self else { return }
+            if talking, self.ownerLock.isActive, !self.conversation.isRemoteTurn {
+                let s = self.config.profile.face?.presence ?? OwnerPresence.Settings()
+                self.faceWatcher.settings = { s }
+                self.faceWatcher.begin("chat")
+            } else {
+                self.faceWatcher.end("chat")
+            }
+        }.store(in: &cancellables)
         conversation.onKeysNeeded = { [weak self] in self?.unlockKeys() }
         // Remote access: off until switched on, and then only on the Tailscale address.
         let speechLocale = Locale(identifier: config.profile.speech?.locale ?? "en-US")
@@ -409,6 +447,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         radar.start()
         menuBar.voiceID = voiceID
+        menuBar.ownerLockApp = self
         menuBar.keys = self
         menuBar.remote = remote
         menuBar.privacy = { [weak self] in self?.dataFlows() ?? [] }
@@ -534,6 +573,53 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func touchIDPolicyChanged(_ status: (vault: [String], legacy: [String], touchID: Bool)?, note: String) {
         if let status { keyStatus = status }
         notch?.flash(note, seconds: 6)
+    }
+
+    /// One sentence on the owner lock for "is the lock on?" and the menu.
+    public func ownerLockStatus() -> String {
+        guard SFaceEmbedder.isInstalled else { return "Face recognition is not installed (scripts/setup-faceid.sh)." }
+        guard faceStore.exists else { return "No face is enrolled, so the owner lock is off. Say \"set up face recognition\" to turn it on." }
+        guard ownerLock.isActive else { return "A face is enrolled but the owner lock is switched off." }
+        if ownerLock.overrideActive, let until = ownerLock.overrideUntil {
+            return "The owner lock is on and open by Touch ID until \(DateFormatter.localizedString(from: until, dateStyle: .none, timeStyle: .short))."
+        }
+        let v = faceWatcher.verdict
+        let seen: String
+        switch v.state {
+        case .idle: seen = "the camera is off until the next request"
+        case .checking: seen = "checking (\(v.detail))"
+        case .owner: seen = "it sees you"
+        case .unknown: seen = "it sees someone it does not recognise"
+        case .noFace: seen = v.ownerPresent ? "no face in view, still open for a moment" : "no face in view"
+        case .error: seen = "the check failed (\(v.detail)), so it is locked"
+        }
+        return "The owner lock is on: \(seen)." + (v.score.map { String(format: " Last score %.2f; it needs %.2f.", $0, self.config.profile.face?.presence.threshold ?? 0.45) } ?? "")
+    }
+
+    /// Deletes the saved face and its key, and switches the lock off.
+    public func forgetFace() throws {
+        faceStore.delete()
+        try config.save(faceLockEnabled: false)
+        FaceLog().record("forgotten", detail: "face data deleted, lock off")
+    }
+
+    /// Runs the guided face setup as soon as Jarvis is idle. The caller has already confirmed Touch ID.
+    public func startFaceEnrollment() {
+        guard !faceEnrollmentPending else { return }
+        faceEnrollmentPending = true
+        Task { @MainActor in
+            defer { faceEnrollmentPending = false }
+            for _ in 0..<120 where conversation.state != .idle { try? await Task.sleep(for: .milliseconds(500)) }
+            let outcome = await FaceEnrollment(watcher: faceWatcher, store: faceStore, host: conversation).run()
+            JarvisLog.info("Face: enrollment finished: \(outcome)")
+            switch outcome {
+            case .enrolled:
+                do { try config.save(faceLockEnabled: true) } catch { JarvisLog.warn("Face: could not switch the lock on: \(error.localizedDescription)") }
+                FaceLog().record("enrolled", detail: "lock on")
+            case .busy: notch.flash("Jarvis is busy. Try face setup again in a moment.", seconds: 5)
+            case .failed: break
+            }
+        }
     }
 
     /// Runs the guided Voice ID setup as soon as Jarvis is idle (it may be mid-reply when asked).

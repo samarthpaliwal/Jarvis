@@ -23,6 +23,8 @@ logs/
 *.db-wal
 *.db-shm
 voiceprint/
+faceprint/
+face.log
 # Remote access tokens (hashes) live outside the repo; never commit a copy
 tokens.json
 remote/tokens*
