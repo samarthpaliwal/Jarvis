@@ -26,15 +26,22 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
         case .kokoro: return "Kokoro on-device (\(voiceSettings.kokoroVoice))"
         }
     }
-    public var isSpeaking: Bool { player?.isPlaying == true || !queue.isEmpty }
+    /// True from the moment a sentence is queued until the last one has finished playing. A sentence
+    /// that is still being synthesized counts: it has left the queue but is not audible yet.
+    public var isSpeaking: Bool { player?.isPlaying == true || preparing || !queue.isEmpty }
     /// Called (main queue) when a request fails, so the router can fall back to the Apple voice.
     public var onFailure: ((String, Error) -> Void)?
+    public var onAudioStart: ((String) -> Void)?
 
     private struct Item { let text: String; let volume: Float; let audio: Task<Data, Error> }
     private var queue: [Item] = []
     private var player: AVAudioPlayer?
     private var completion: ((Bool) -> Void)?
     private var generation = 0
+    /// A sentence has been taken off the queue and its audio is being fetched.
+    private var preparing = false
+    /// Replaces the network call in tests.
+    var synthesizerOverride: ((String) async throws -> Data)?
 
     public init(provider: Provider, voice: Profile.Voice) {
         self.provider = provider
@@ -60,17 +67,20 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     public func enqueue(_ text: String, volume: Float, rate: Float) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        let fetch = Task { try await self.synthesize(t) }
+        let fetch = Task { try await (self.synthesizerOverride ?? self.synthesize)(t) }
         queue.append(Item(text: t, volume: volume, audio: fetch))
-        if player == nil || player?.isPlaying == false { playNext() }
+        // Start only if nothing is playing AND nothing is being prepared; otherwise two sentences
+        // would be fetched and played on top of each other.
+        if !preparing, player?.isPlaying != true { playNext() }
     }
 
     public func whenQueueDrained(_ onFinished: @escaping (Bool) -> Void) {
-        if queue.isEmpty && player?.isPlaying != true { DispatchQueue.main.async { onFinished(true) } } else { completion = onFinished }
+        if !isSpeaking { DispatchQueue.main.async { onFinished(true) } } else { completion = onFinished }
     }
 
     public func stop() {
         generation += 1
+        preparing = false
         for item in queue { item.audio.cancel() }
         queue.removeAll()
         let wasPlaying = player?.isPlaying == true
@@ -87,11 +97,13 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     private func playNext() {
         guard !queue.isEmpty else {
             player = nil
+            preparing = false
             if let done = completion { completion = nil; DispatchQueue.main.async { done(true) } }
             return
         }
         let item = queue.removeFirst()
         let gen = generation
+        preparing = true
         Task { @MainActor in
             do {
                 let data = try await item.audio.value
@@ -101,10 +113,14 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
                 p.volume = max(0, min(1, item.volume))
                 p.prepareToPlay()
                 self.player = p
-                p.play()
+                self.preparing = false
+                guard p.play() else { throw NSError(domain: "Jarvis.TTS", code: 2, userInfo: [NSLocalizedDescriptionKey: "audio player refused to start"]) }
+                self.onAudioStart?(self.provider.rawValue)
             } catch is CancellationError {
+                if gen == self.generation { self.preparing = false; self.playNext() }
             } catch {
                 guard gen == self.generation else { return }
+                self.preparing = false
                 JarvisLog.warn("\(self.provider.rawValue) TTS failed: \(error.localizedDescription)")
                 self.onFailure?(item.text, error)
                 self.playNext()
@@ -182,6 +198,9 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
     private var active: SpeechOutput
     private var lastVolume: Float = 1, lastRate: Float = 0.52
     public var isOnline: () -> Bool = { true }
+    public var onAudioStart: ((String) -> Void)? {
+        didSet { apple.onAudioStart = onAudioStart; cloud?.onAudioStart = onAudioStart }
+    }
 
     public init(apple: AppleSpeechOutput) {
         self.apple = apple
@@ -215,6 +234,7 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
                 self.active = self.apple
                 self.apple.enqueue(text, volume: self.lastVolume, rate: self.lastRate)
             }
+            c.onAudioStart = onAudioStart
             cloud = c
         } else {
             cloud = nil

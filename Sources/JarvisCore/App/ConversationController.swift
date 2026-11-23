@@ -57,6 +57,8 @@ public final class ConversationController: ObservableObject {
     private var turn = 0
     private var listeningForStopOnly = false
     private var replyTask: Task<Void, Never>?
+    /// The request being worked on (nil when idle). One at a time.
+    public private(set) var trace: RequestTrace?
 
     // Approval
     private var pendingApproval: (request: ApprovalRequest, continuation: CheckedContinuation<Bool, Never>)?
@@ -84,6 +86,19 @@ public final class ConversationController: ObservableObject {
         wake.onLevel = { [weak self] level in self?.notch.pushAudioLevel(level) }
         wake.audioTap = { [weak self] chunk in self?.forwardAudio(chunk) }
         notch.onApprovalDecision = { [weak self] id, ok in self?.resolveApproval(id: id, approved: ok) }
+        speech.onAudioStart = { [weak self] engine in
+            guard let trace = self?.trace, trace.mark("first_audio") == nil else { return }
+            trace.event(.spoken, "first_audio", ["engine": engine])
+        }
+    }
+
+    /// Starts tracing a new request, closing any previous one that was cut short.
+    private func beginRequest(source: String) -> RequestTrace {
+        trace?.finish(outcome: "superseded")
+        let t = RequestTrace(source: source)
+        trace = t
+        t.event(.heard, source, ["mode": modes.current.id])
+        return t
     }
 
     // MARK: Wake / stop
@@ -91,7 +106,8 @@ public final class ConversationController: ObservableObject {
     public func handleWake(at date: Date) {
         switch state {
         case .speaking:
-            JarvisLog.info("Barge-in: wake word while speaking")
+            JarvisLog.info("Barge-in: wake word while speaking", request: trace?.id)
+            trace?.finish(outcome: "interrupted")
             speech.stop()
             replyTask?.cancel()
         case .listening, .thinking:
@@ -106,6 +122,7 @@ public final class ConversationController: ObservableObject {
     }
 
     public func stopEverything() {
+        trace?.finish(outcome: "cancelled")
         speech.stop()
         replyTask?.cancel()
         transcriber.cancel()
@@ -124,6 +141,7 @@ public final class ConversationController: ObservableObject {
     private func startListening(at date: Date, followUp: Bool = false, seed: String? = nil) {
         turn += 1
         wakeTime = date
+        let trace = beginRequest(source: seed != nil ? "barge_in" : followUp ? "follow_up" : "wake")
         firstWordLogged = seed != nil
         listeningForStopOnly = false
         var settings = endpointSettings
@@ -177,14 +195,15 @@ public final class ConversationController: ObservableObject {
         if listeningForStopOnly {
             let words = u.text.lowercased().split(separator: " ").prefix(3)
             if words.contains("stop") || words.contains("stop.") {
-                JarvisLog.info("Barge-in: “stop” while speaking")
+                JarvisLog.info("Barge-in: “stop” while speaking", request: trace?.id)
                 stopEverything()
                 return
             }
             // Talking over Jarvis (not an echo of its own voice) interrupts and becomes the next turn.
             if config.profile.speech?.interruptOnSpeech ?? true, state == .speaking,
                Self.isGenuineInterruption(heard: u.text, spoken: currentReply) {
-                JarvisLog.info("Barge-in: speech while speaking: “\(u.text)”")
+                JarvisLog.info("Barge-in: speech while speaking: “\(u.text)”", request: trace?.id)
+                trace?.finish(outcome: "interrupted")
                 speech.stop()
                 replyTask?.cancel()
                 listeningForStopOnly = false
@@ -199,14 +218,17 @@ public final class ConversationController: ObservableObject {
                 firstWordLogged = true
                 let ms = Date().timeIntervalSince(wakeTime) * 1000
                 lastTurn.wakeToFirstWordMs = ms
-                JarvisLog.info(String(format: "Wake → first word %.0f ms", ms))
+                trace?.event(.transcribed, "first_word")
+                JarvisLog.info(String(format: "Wake → first word %.0f ms", ms), request: trace?.id)
             }
         }
     }
 
     private func handleTranscriberError(_ error: Error) {
-        JarvisLog.error("Transcriber: \(error.localizedDescription)")
+        JarvisLog.error("Transcriber: \(error.localizedDescription)", request: trace?.id)
         guard state == .listening else { return }
+        trace?.event(.transcribed, "error", ["error": error.localizedDescription])
+        trace?.finish(outcome: "stt_error")
         endpointTimer?.cancel()
         transcriber.cancel()
         wake.setPaused(false)
@@ -227,10 +249,13 @@ public final class ConversationController: ObservableObject {
         lastTurn.endReason = reason.rawValue
         let text = endpointer.transcript
         lastTurn.transcript = text
-        JarvisLog.info("Listening ended (\(reason.rawValue)): “\(text)”")
+        JarvisLog.info("Listening ended (\(reason.rawValue)): “\(text)”", request: trace?.id)
+        trace?.event(.transcribed, "speech_end", ["reason": reason.rawValue, "chars": text.count,
+                                                   "silence_wait_ms": (endpointer.settings.silenceAfterSpeech * 1000).rounded()])
         wake.setPaused(false)
         onTurnActive?(false)
         guard !text.isEmpty else {
+            trace?.finish(outcome: "no_speech")
             state = .idle
             notch.isFollowUp = false
             notch.collapse()
@@ -238,7 +263,8 @@ public final class ConversationController: ObservableObject {
         }
         // "thanks" / "that's all" on a follow-up ends the conversation without a round trip.
         if notch.isFollowUp, Self.isConversationEnd(text) {
-            JarvisLog.info("Conversation ended by “\(text)”")
+            JarvisLog.info("Conversation ended by “\(text)”", request: trace?.id)
+            trace?.finish(outcome: "ended_by_user")
             transcriber.cancel()
             state = .idle
             notch.isFollowUp = false
@@ -249,12 +275,15 @@ public final class ConversationController: ObservableObject {
         state = .thinking
         notch.think()
         replyTask?.cancel()
+        let request = trace
         replyTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard let self, self.state == .thinking, !Task.isCancelled else { return }
-            let finalText = self.endpointer.transcript.isEmpty ? text : self.endpointer.transcript
-            self.transcriber.cancel()
-            await self.respond(to: finalText)
+            await RequestTrace.$current.withValue(request) {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self, self.state == .thinking, !Task.isCancelled else { return }
+                let finalText = self.endpointer.transcript.isEmpty ? text : self.endpointer.transcript
+                self.transcriber.cancel()
+                await self.respond(to: finalText)
+            }
         }
     }
 
@@ -265,6 +294,7 @@ public final class ConversationController: ObservableObject {
             JarvisLog.info("Text turn ignored: busy (\(state.rawValue))")
             return
         case .speaking:
+            trace?.finish(outcome: "interrupted")
             speech.stop(); replyTask?.cancel(); transcriber.cancel(); listeningForStopOnly = false
         case .listening:
             // Typing during a (follow-up) listen replaces the spoken turn.
@@ -280,10 +310,14 @@ public final class ConversationController: ObservableObject {
         notch.listen()
         notch.transcript = text
         speechEndedAt = Date()
+        let request = beginRequest(source: "text")
+        request.event(.transcribed, "speech_end", ["reason": "typed", "chars": text.count])
         state = .thinking
         notch.think()
         replyTask?.cancel()
-        replyTask = Task { [weak self] in await self?.respond(to: text) }
+        replyTask = Task { [weak self] in
+            await RequestTrace.$current.withValue(request) { await self?.respond(to: text) }
+        }
     }
 
     // MARK: Responding (streaming)
@@ -306,6 +340,7 @@ public final class ConversationController: ObservableObject {
                     firstDelta = false
                     let ms = Date().timeIntervalSince(self.speechEndedAt) * 1000
                     self.lastTurn.endOfSpeechToReplyMs = ms
+                    RequestTrace.current?.event(.intent, "first_token")
                     JarvisLog.info(String(format: "End of speech → first reply token %.0f ms", ms))
                 }
                 if self.state == .thinking { self.state = voiceOn ? .speaking : .thinking; if voiceOn { self.listenForStop() } }
@@ -321,23 +356,31 @@ public final class ConversationController: ObservableObject {
             }
         }
 
+        let request = RequestTrace.current
+        var failed = false
         var turn: Brain.Turn
         do {
             turn = try await responder(text, onText)
         } catch is CancellationError {
+            request?.finish(outcome: "cancelled")
             return
         } catch {
             turn = Brain.Turn()
             let msg = Self.friendly(error)
             turn.text = msg
             onText(msg)
+            failed = true
+            request?.event(.intent, "error", ["error": String(describing: type(of: error)), "message": String(error.localizedDescription.prefix(200))])
             JarvisLog.error("Brain: \(error.localizedDescription)")
         }
-        guard !Task.isCancelled, state != .idle else { return }
+        request?.event(.intent, "llm_done", ["engine": turn.engine, "chars": turn.text.count])
+        request?.set("engine", turn.engine)
+        request?.set("tokens", ["in": turn.inputTokens, "out": turn.outputTokens, "cache_read": turn.cacheReadTokens, "cache_write": turn.cacheWriteTokens])
+        guard !Task.isCancelled, state != .idle else { request?.finish(outcome: "cancelled"); return }
         lastTurn.toolCalls = turn.toolCalls
         lastTurn.tokens = (turn.inputTokens, turn.outputTokens)
         if !turn.toolCalls.isEmpty || turn.inputTokens > 0 {
-            JarvisLog.info("Turn done: tools=\(turn.toolCalls) tokens in/out=\(turn.inputTokens)/\(turn.outputTokens) cache read/write=\(turn.cacheReadTokens)/\(turn.cacheWriteTokens)")
+            JarvisLog.info("Turn done: engine=\(turn.engine) tools=\(turn.toolCalls) tokens in/out=\(turn.inputTokens)/\(turn.outputTokens) cache read/write=\(turn.cacheReadTokens)/\(turn.cacheWriteTokens)")
         }
         // Make sure the notch shows the final text and cards even if nothing streamed.
         if notch.phase != .responding { notch.respond(turn.text, cards: turn.cards, collapseAfter: voiceOn ? 60 : 10) }
@@ -347,6 +390,8 @@ public final class ConversationController: ObservableObject {
         JarvisLog.conversation(you: lastUserText, jarvis: turn.text, tools: turn.toolCalls)
 
         guard voiceOn else {
+            request?.event(.spoken, "shown", ["voice": false])
+            request?.finish(outcome: failed ? "error" : "shown")
             state = .idle
             notch.scheduleCollapse(after: 10)
             return
@@ -357,6 +402,8 @@ public final class ConversationController: ObservableObject {
         listenForStop()
         speech.whenQueueDrained { [weak self] completed in
             guard let self else { return }
+            request?.event(.spoken, "speech_done", ["completed": completed])
+            request?.finish(outcome: failed ? "error" : completed ? "spoken" : "interrupted")
             self.transcriber.cancel()
             if self.state == .speaking {
                 self.state = .idle

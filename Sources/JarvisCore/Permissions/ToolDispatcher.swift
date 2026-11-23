@@ -58,6 +58,7 @@ public final class ToolDispatcher {
     public func recordServerTool(_ name: String, input: JSONObject) {
         log.record(ActionRecord(timestamp: Date(), tool: name, tier: Tier.auto.rawValue, source: "claude-server",
                                 input: Self.describe(input), outcome: "ran", summary: nil, durationMs: nil))
+        RequestTrace.current?.tool(name, ms: nil, outcome: "ran", tier: Tier.auto.rawValue)
     }
 
     public func register(_ tool: JarvisTool) { tools[tool.name] = tool }
@@ -83,9 +84,12 @@ public final class ToolDispatcher {
         let started = Date()
         let inputSummary = Self.describe(input)
         func record(_ outcome: String, tier: Tier, summary: String? = nil) {
+            let ms = Date().timeIntervalSince(started) * 1000
             log.record(ActionRecord(timestamp: started, tool: name, tier: tier.rawValue, source: source.rawValue,
                                     input: inputSummary, outcome: outcome, summary: summary,
-                                    durationMs: Int(Date().timeIntervalSince(started) * 1000)))
+                                    durationMs: Int(ms)))
+            // "approved" is a step on the way to running, not the end of the call.
+            if outcome != "approved" { RequestTrace.current?.tool(name, ms: ms, outcome: outcome, tier: tier.rawValue) }
         }
 
         guard let tool = tools[name] else {

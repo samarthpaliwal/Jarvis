@@ -513,6 +513,33 @@ The dispatcher handles denylist, approval, logging, and the undo stack.
 
 The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
 
+## Logs and tracing
+
+Everything lives in `~/Library/Logs/Jarvis/` (menu → *Open Logs*):
+
+| File | What it holds |
+|------|---------------|
+| `jarvis.log` | Human-readable events. Lines that belong to a request carry its ID, like `[r-3fa9c1]`. |
+| `trace.jsonl` | Structured. One JSON object per pipeline stage, and one summary per request with per-stage latency. Never contains what was said, only sizes and timings. |
+| `actions.log` | Every tool call as a JSON line: time, tool, tier, source, input, outcome, duration. |
+| `conversations.log` | What you said and what Jarvis answered, secrets redacted. |
+
+Every request gets an ID and moves through five stages: **heard → transcribed → intent → action → spoken**.
+To follow one request end to end:
+
+```bash
+grep r-3fa9c1 ~/Library/Logs/Jarvis/jarvis.log ~/Library/Logs/Jarvis/trace.jsonl
+```
+
+For latency per stage across recent requests (median, 90th percentile, worst), and the slowest tool:
+
+```bash
+scripts/latency-report.py --last 50
+```
+
+Log files rotate at 5 MB and keep three old copies (`tuning.logMaxMegabytes`, `tuning.logKeepFiles`).
+Unit tests write to a temporary folder, never to these files.
+
 ## Known limitations
 
 - Gmail and Notion were built against the API docs but not exercised live (no tokens on this Mac during development). Parsers are unit-tested; errors are spoken and logged.

@@ -13,6 +13,9 @@ public protocol SpeechOutput: AnyObject {
     func whenQueueDrained(_ onFinished: @escaping (Bool) -> Void)
     /// Stop immediately (barge-in).
     func stop()
+    /// Called on the main queue each time an utterance becomes audible, with the engine's short name.
+    /// The pipeline uses the first call per request to measure time-to-voice.
+    var onAudioStart: ((String) -> Void)? { get set }
 }
 
 /// Picks the best installed system voice. Premium > Enhanced > Default, English first.
@@ -94,6 +97,7 @@ public final class AppleSpeechOutput: NSObject, SpeechOutput, AVSpeechSynthesize
     public var isSpeaking: Bool { synthesizer.isSpeaking }
     public var voice: AVSpeechSynthesisVoice?
 
+    public var onAudioStart: ((String) -> Void)?
     private let synthesizer = AVSpeechSynthesizer()
     private var completion: ((Bool) -> Void)?
     private var pending = 0
@@ -145,6 +149,10 @@ public final class AppleSpeechOutput: NSObject, SpeechOutput, AVSpeechSynthesize
         guard pending == 0, let done = completion else { return }
         completion = nil
         DispatchQueue.main.async { done(completed) }
+    }
+
+    public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async { [weak self] in self?.onAudioStart?("apple") }
     }
 
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {

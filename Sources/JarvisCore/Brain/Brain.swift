@@ -141,6 +141,7 @@ public final class Brain: ObservableObject {
             var blockTypes: [String] = []
             var needsGap = false   // text resuming after a web search needs a space ("Checking now. The…")
 
+            let roundStarted = Date()
             let events = client.stream(request)
             do {
             for try await event in events {
@@ -196,6 +197,9 @@ public final class Brain: ObservableObject {
                 throw e
             }
             if !currentText.isEmpty { assistantContent.append(["type": "text", "text": currentText]) }
+            RequestTrace.current?.event(.intent, "llm_round", ["round": round, "stop": stopReason, "model": model,
+                                                               "ms": (Date().timeIntervalSince(roundStarted) * 1000).rounded(),
+                                                               "tool_calls": assistantContent.filter { ($0["type"] as? String)?.hasSuffix("tool_use") ?? false }.count])
             JarvisLog.info("Claude round \(round): stop=\(stopReason) blocks=\(blockTypes) text=\(currentText.count + assistantContent.compactMap { ($0["text"] as? String)?.count }.reduce(0, +)) chars")
             if assistantContent.isEmpty {
                 // Empty reply (cut off, refused, or nothing to say): don't poison the history with an empty block.

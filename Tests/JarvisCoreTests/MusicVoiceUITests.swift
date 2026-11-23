@@ -96,3 +96,36 @@ final class KokoroTests: XCTestCase {
         XCTAssertEqual(v.kokoroSpeed, 1.0)
     }
 }
+
+final class SpeechQueueTests: XCTestCase {
+    /// Found by the request trace on 2026-11-22: a sentence being synthesized had left the queue but
+    /// was not playing yet, so Jarvis reported "done speaking" and started listening over its own voice.
+    @MainActor func testSentenceBeingSynthesizedCountsAsSpeaking() async {
+        let out = CloudSpeechOutput(provider: .kokoro, voice: Profile.Voice())
+        let calls = Counter()
+        out.synthesizerOverride = { _ in
+            calls.increment()
+            try await Task.sleep(for: .seconds(30))   // never finishes within the test
+            return Data()
+        }
+        var drained: Bool?
+        out.enqueue("First sentence.", volume: 0, rate: 0.5)
+        XCTAssertTrue(out.isSpeaking, "in-flight audio is speech")
+        out.enqueue("Second sentence.", volume: 0, rate: 0.5)
+        out.whenQueueDrained { drained = $0 }
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertNil(drained, "must not report done while the first sentence is still being prepared")
+        XCTAssertTrue(out.isSpeaking)
+
+        out.stop()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(drained, false, "stop reports an interrupted reply")
+        XCTAssertFalse(out.isSpeaking)
+    }
+
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock(); private var n = 0
+        func increment() { lock.lock(); n += 1; lock.unlock() }
+        var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+    }
+}

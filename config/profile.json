@@ -168,6 +168,8 @@
     "approvalTimeoutSeconds": 12,
     "kokoroPort": 8880,
     "openaiTtsModel": "gpt-4o-mini-tts",
-    "ttsRequestTimeoutSeconds": 15
+    "ttsRequestTimeoutSeconds": 15,
+    "logMaxMegabytes": 5,
+    "logKeepFiles": 3
   }
 }

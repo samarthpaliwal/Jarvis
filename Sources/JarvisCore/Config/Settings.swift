@@ -116,6 +116,12 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var openaiTtsModel: String = "gpt-4o-mini-tts"
     public var ttsRequestTimeoutSeconds: Double = 15
 
+    // Logs
+    /// A log file rotates when it passes this size.
+    public var logMaxMegabytes: Double = 5
+    /// Rotated files kept per log (jarvis.log.1 … .N).
+    public var logKeepFiles: Int = 3
+
     public init() {}
 
     public init(from decoder: Decoder) throws {
@@ -142,6 +148,8 @@ public struct Tuning: Codable, Equatable, Sendable {
         kokoroPort = try c.decodeIfPresent(Int.self, forKey: .kokoroPort) ?? kokoroPort
         openaiTtsModel = try c.decodeIfPresent(String.self, forKey: .openaiTtsModel) ?? openaiTtsModel
         ttsRequestTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .ttsRequestTimeoutSeconds) ?? ttsRequestTimeoutSeconds
+        logMaxMegabytes = try c.decodeIfPresent(Double.self, forKey: .logMaxMegabytes) ?? logMaxMegabytes
+        logKeepFiles = try c.decodeIfPresent(Int.self, forKey: .logKeepFiles) ?? logKeepFiles
     }
 
     /// Applies `JARVIS_*` overrides. Values that don't parse are skipped and reported.
