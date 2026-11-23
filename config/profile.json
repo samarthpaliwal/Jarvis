@@ -184,6 +184,74 @@
     "httpTimeoutSeconds": 15,
     "httpMaxRetries": 2,
     "httpRetryBaseSeconds": 0.5,
-    "httpRetryMaxSeconds": 8
+    "httpRetryMaxSeconds": 8,
+    "dailyBudgetUSD": 3,
+    "budgetWarnFraction": 0.8,
+    "modelRequestsPerMinute": 30,
+    "speechRequestsPerMinute": 90
+  },
+  "pricing": {
+    "_comment": "US dollars. Model prices are per million tokens (Anthropic list prices, 2026-11-03); the longest matching prefix wins. Speech prices are estimates per 1,000 characters: set your plan's real rate.",
+    "models": [
+      {
+        "prefix": "claude-fable-5-2",
+        "input": 8,
+        "output": 40,
+        "cacheRead": 0.2,
+        "cacheWrite": 10
+      },
+      {
+        "prefix": "claude-opus-5-5",
+        "input": 4,
+        "output": 20,
+        "cacheRead": 0.2,
+        "cacheWrite": 5
+      },
+      {
+        "prefix": "claude-opus",
+        "input": 5,
+        "output": 25,
+        "cacheRead": 0.5,
+        "cacheWrite": 6.25
+      },
+      {
+        "prefix": "claude-sonnet-5-5",
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheWrite": 2.5
+      },
+      {
+        "prefix": "claude-sonnet-5",
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.2,
+        "cacheWrite": 2.5
+      },
+      {
+        "prefix": "claude-sonnet",
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.3,
+        "cacheWrite": 3.75
+      },
+      {
+        "prefix": "claude-haiku-5-5",
+        "input": 0.1,
+        "output": 0.5,
+        "cacheRead": 0.01,
+        "cacheWrite": 0.125
+      },
+      {
+        "prefix": "claude-haiku",
+        "input": 1,
+        "output": 5,
+        "cacheRead": 0.1,
+        "cacheWrite": 1.25
+      }
+    ],
+    "webSearchPerCall": 0.01,
+    "elevenLabsPer1kChars": 0.1,
+    "openAIPer1kChars": 0.015
   }
 }

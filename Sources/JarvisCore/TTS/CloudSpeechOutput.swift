@@ -9,6 +9,9 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     public static var kokoroBaseURL = URL(string: "http://127.0.0.1:\(Tuning().kokoroPort)")!
     public static var openAIModel = Tuning().openaiTtsModel
     public static var requestTimeout: TimeInterval = Tuning().ttsRequestTimeoutSeconds
+    /// Spend guard for the paid voices (ElevenLabs, OpenAI). Kokoro is local and free. When the cap is
+    /// reached the request throws, and the router speaks the sentence with the Apple voice instead.
+    public nonisolated(unsafe) static var budget: Budget?
     private static let localSession: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.connectionProxyDictionary = [:]
@@ -188,6 +191,8 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     }
 
     private func synthesize(_ text: String) async throws -> Data {
+        let paid = provider != .kokoro
+        if paid { try Self.budget?.check(provider.rawValue) }
         let (base, why) = requestBody()
         guard var req = base else { throw NSError(domain: "Jarvis.TTS", code: 1, userInfo: [NSLocalizedDescriptionKey: why]) }
         req.timeoutInterval = Self.requestTimeout
@@ -198,6 +203,7 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
             let msg = String(data: data.prefix(300), encoding: .utf8) ?? ""
             throw NSError(domain: "Jarvis.TTS", code: code, userInfo: [NSLocalizedDescriptionKey: "HTTP \(code) \(msg)"])
         }
+        if paid, let b = Self.budget { b.record(provider.rawValue, usd: b.pricing.speechCost(provider: provider.rawValue, characters: text.count)) }
         return data
     }
 }

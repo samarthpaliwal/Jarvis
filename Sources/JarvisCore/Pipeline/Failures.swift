@@ -82,6 +82,12 @@ public enum SpokenFailure {
         if let t = error as? TimeoutError {
             return t.what == "The request" ? "That took too long, so I stopped. Try again." : "\(t.what) took too long, so I stopped it."
         }
+        if let b = error as? BudgetError {
+            switch b {
+            case .dailyCapReached(_, let cap): return "I've reached today's \(Budget.dollars(cap)) budget. I'll be back at midnight, or raise it in settings."
+            case .rateLimited: return "I'm sending too many requests. Give me a minute."
+            }
+        }
         if let e = error as? ClaudeClient.ClientError {
             switch e {
             case .noAPIKey: return "I don't have an API key yet. Add one from the Jarvis menu."

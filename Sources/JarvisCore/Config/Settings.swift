@@ -104,6 +104,15 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var llmResourceTimeoutSeconds: Double = 300
     public var anthropicVersion: String = "2026-10-21"
 
+    // Spending
+    /// Paid requests (Claude, web search, cloud voices) stop for the day at this many US dollars. 0 = no cap.
+    public var dailyBudgetUSD: Double = 3
+    /// Jarvis says so once when this share of the budget is used.
+    public var budgetWarnFraction: Double = 0.8
+    /// More model requests than this in one minute is treated as a runaway loop and refused.
+    public var modelRequestsPerMinute: Int = 30
+    public var speechRequestsPerMinute: Int = 90
+
     // Network
     /// Timeout for requests that do not set their own (Gmail, Notion, Spotify, Google sign-in).
     public var httpTimeoutSeconds: Double = 15
@@ -159,6 +168,13 @@ public struct Tuning: Codable, Equatable, Sendable {
 
     public init() {}
 
+    public var budgetLimits: Budget.Limits {
+        var l = Budget.Limits()
+        l.dailyCapUSD = max(0, dailyBudgetUSD); l.warnFraction = min(1, max(0.1, budgetWarnFraction))
+        l.modelRequestsPerMinute = modelRequestsPerMinute; l.speechRequestsPerMinute = speechRequestsPerMinute
+        return l
+    }
+
     public var retryPolicy: RetryPolicy {
         var p = RetryPolicy()
         p.maxRetries = max(0, httpMaxRetries); p.baseDelay = httpRetryBaseSeconds; p.maxDelay = httpRetryMaxSeconds; p.timeout = httpTimeoutSeconds
@@ -182,6 +198,10 @@ public struct Tuning: Codable, Equatable, Sendable {
         llmRequestTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .llmRequestTimeoutSeconds) ?? llmRequestTimeoutSeconds
         llmResourceTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .llmResourceTimeoutSeconds) ?? llmResourceTimeoutSeconds
         anthropicVersion = try c.decodeIfPresent(String.self, forKey: .anthropicVersion) ?? anthropicVersion
+        dailyBudgetUSD = try c.decodeIfPresent(Double.self, forKey: .dailyBudgetUSD) ?? dailyBudgetUSD
+        budgetWarnFraction = try c.decodeIfPresent(Double.self, forKey: .budgetWarnFraction) ?? budgetWarnFraction
+        modelRequestsPerMinute = try c.decodeIfPresent(Int.self, forKey: .modelRequestsPerMinute) ?? modelRequestsPerMinute
+        speechRequestsPerMinute = try c.decodeIfPresent(Int.self, forKey: .speechRequestsPerMinute) ?? speechRequestsPerMinute
         httpTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .httpTimeoutSeconds) ?? httpTimeoutSeconds
         httpMaxRetries = try c.decodeIfPresent(Int.self, forKey: .httpMaxRetries) ?? httpMaxRetries
         httpRetryBaseSeconds = try c.decodeIfPresent(Double.self, forKey: .httpRetryBaseSeconds) ?? httpRetryBaseSeconds

@@ -302,6 +302,8 @@ public struct Profile: Codable, Equatable {
     public var web: Web?
     /// Thresholds, limits, and timeouts. See Settings.swift.
     public var tuning: Tuning?
+    /// What paid calls cost. See Net/Budget.swift.
+    public var pricing: Pricing?
 
     /// Used when profile.json is missing or malformed so the app still launches.
     public static let fallback = Profile(

@@ -589,6 +589,33 @@ removes the same file.
 
 To verify: `kill -9 $(pgrep -x Jarvis)`, then `pgrep -x Jarvis` shows a new process ID.
 
+## Spending: daily cap and rate limits
+
+Every paid call goes through one guard ([Net/Budget.swift](Sources/JarvisCore/Net/Budget.swift)): Claude
+replies, cache warm-ups, briefings, web searches, and the paid voices (ElevenLabs, OpenAI). The Kokoro and
+Apple voices are free and are not counted.
+
+| Setting (`profile.json → tuning`) | Default | Meaning |
+|---|---|---|
+| `dailyBudgetUSD` | 3 | Paid requests stop for the day at this amount. 0 = no cap. |
+| `budgetWarnFraction` | 0.8 | Jarvis says "Heads up: I've used 80 percent of today's 3 dollar budget." once. |
+| `modelRequestsPerMinute` | 30 | More than this in a minute is treated as a runaway loop and refused. |
+| `speechRequestsPerMinute` | 90 | The same, for paid voices. |
+
+- **Before** each call the guard checks the cap and the rate. Over the cap, the request never leaves the Mac.
+- **After** each call it records the real cost from the API's own token counts, including cached tokens
+  and web searches. A reply that is cut off is still recorded.
+- **At the cap** Jarvis says so once, then answers from the local Ollama model if one is installed, and
+  otherwise tells you the budget is used up. Paid voices fall back to the Apple voice.
+- **The day** is your local calendar day. Spend is kept in
+  `~/Library/Application Support/Jarvis/spend.json` and survives restarts. The menu shows
+  `Spend: $0.42 of $3.00 today`.
+
+Prices are in `profile.json → pricing` because they change: Anthropic list prices per million tokens as of
+2026-11-03, one cent per web search, and estimates for the paid voices that you should replace with your
+plan's rate. An unknown model is priced like the most expensive one, so the cap can only arrive early.
+For scale: a typical warm Sonnet 5.5 turn costs about $0.002, and a cold one about $0.03.
+
 ## Latency
 
 Time from the end of your sentence to Jarvis's voice has three parts. Each was measured, then fixed
@@ -709,6 +736,18 @@ Unit tests write to a temporary folder, never to these files.
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.10.0 — Upgrade phases 1 and 2: architecture and reliability (2026-11-22)
+- **Architecture:** five stages behind interfaces (wake, speech-to-text, intent, actions, speech-out), one
+  state-transition table, a request ID traced through every stage, all thresholds in `tuning` with
+  `JARVIS_*` overrides, and a spoken message for every failure.
+- **Echo:** Jarvis no longer answers its own voice (19 of 89 logged exchanges were echoes).
+- **Reliability:** audio-device crash fixed; launchd supervisor restarts after a crash; retries with backoff
+  on every network call; tool and request deadlines; daily cost cap with a spoken warning.
+- **Latency:** opening clause spoken first, prompt cache warmed while you speak, shorter silence wait after
+  a complete sentence. First-chunk synthesis p90 3.65 s → 1.61 s.
+- **Bugs found by the new tracing and tests:** overlapping Kokoro sentences, replies stalled by a sentence
+  ending in a two-letter word, error messages spoken twice, token usage counted twice. 198 tests.
 
 ### 0.9.3 — Web search, stable signing (2026-11-07)
 - Jarvis can search the web and read pages freely, using Anthropic's server-side `web_search` and `web_fetch`. Server blocks are kept verbatim in the history, `pause_turn` resumes automatically, an interrupted search is repaired out of the history, and every search is logged. A web answer takes about 3 s.

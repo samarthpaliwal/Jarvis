@@ -20,6 +20,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var timers: TimerService!
     public private(set) var actionLog: ActionLog!
     private var restartedAfterCrash = false
+    public private(set) var budget: Budget!
     private var termSource: DispatchSourceSignal?
     public private(set) var calendar: CalendarService!
     public private(set) var notion: NotionClient!
@@ -174,7 +175,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             MemoryTool(store: memory), MemorySearchTool(store: memory), WeatherTool(world: world), NewsHeadlinesTool(world: world),
             UseSkillTool(library: skills),
         ])
-        brain = Brain(client: ClaudeClient(tuning: config.tuning), dispatcher: dispatcher, config: config, modes: modes, undo: undo)
+        // Every paid call goes through one spend guard: a daily cap, a per-minute rate limit, and a ledger.
+        budget = Budget(limits: config.tuning.budgetLimits, pricing: config.profile.pricing ?? Pricing())
+        CloudSpeechOutput.budget = budget
+        budget.onNotice = { [weak self] notice in
+            DispatchQueue.main.async {
+                JarvisLog.warn("Budget: \(Budget.spoken(notice))")
+                self?.conversation?.announceWhenIdle(Budget.spoken(notice))
+            }
+        }
+        JarvisLog.info("Budget: \(budget.summary), warn at \(Int(config.tuning.budgetWarnFraction * 100))%, \(config.tuning.modelRequestsPerMinute) model requests/min")
+        brain = Brain(client: MeteredModel(ClaudeClient(tuning: config.tuning), budget: budget), dispatcher: dispatcher, config: config, modes: modes, undo: undo)
         brain.memory = memory
         brain.skills = skills
         brain.local = local
@@ -264,6 +275,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                     googleAuth: googleAuth, notion: notion, briefing: briefing,
                                     proactive: proactive, context: context, hud: hud, scenes: scenes,
                                     memory: memory, skills: skills, local: local, narrator: narrator)
+        menuBar.budget = budget
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() == nil ? "MISSING" : "present")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
                                     onBriefing: { [weak self] in

@@ -73,6 +73,13 @@ public final class Brain: ObservableObject {
     public func respond(to userText: String, onText: @escaping (String) -> Void) async throws -> Turn {
         do {
             return try await respondOnce(to: userText, onText: onText)
+        } catch BudgetError.dailyCapReached(let spent, let cap) {
+            // Out of budget for today: answer on-device if a local model is there, otherwise say so.
+            guard config.profile.local?.enabled ?? true, let local, await local.status().hasModel else {
+                throw BudgetError.dailyCapReached(spent: spent, cap: cap)
+            }
+            JarvisLog.warn(String(format: "Daily budget reached ($%.2f of $%.2f); answering with the local model", spent, cap))
+            return try await respondLocally(userText, client: local, onText: onText)
         } catch ClaudeClient.ClientError.http(400, let msg) {
             // Never leave Sam stuck behind a bad history: forget it and try once more.
             JarvisLog.warn("400 from Claude (\(msg.prefix(120))); clearing conversation history and retrying once")

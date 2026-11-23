@@ -34,6 +34,7 @@ public final class ConversationController: ObservableObject {
     /// Reports whether the output is headphones. Swappable for tests.
     public var outputIsHeadphones: () -> Bool = { AudioDeviceInfo.outputIsHeadphones() }
     private var errorSpeech = SpeechRateLimit()
+    private var pendingAnnouncements: [String] = []
     private var lastUserText = ""
     nonisolated static let endWords: Set<String> = ["thanks", "thank", "thankyou", "bye", "goodbye", "later", "done", "nevermind", "never", "cheers", "nothing", "no"]
 
@@ -87,6 +88,13 @@ public final class ConversationController: ObservableObject {
         }
         guard to != from else { return true }
         state = to
+        if to == .idle, !pendingAnnouncements.isEmpty {
+            // Something had to wait for the current reply to finish (a budget warning, say).
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.state == .idle, !self.pendingAnnouncements.isEmpty else { return }
+                self.deliver(self.pendingAnnouncements.removeFirst())
+            }
+        }
         TraceSink.shared.write(["event": "state", "from": from.rawValue, "to": to.rawValue, "on": event.rawValue, "request": trace?.id ?? "-"])
         return true
     }
@@ -283,6 +291,11 @@ public final class ConversationController: ObservableObject {
         onTurnActive?(false)
         notch.isFollowUp = false
         reportFailure(SpokenFailure.message(for: error))
+    }
+
+    /// Says something as soon as Jarvis is idle: now, or right after the reply in progress.
+    public func announceWhenIdle(_ text: String) {
+        if state == .idle { deliver(text) } else { pendingAnnouncements.append(text) }
     }
 
     /// Says a failure aloud (and shows it). Used for failures outside a reply: recognizer, microphone.

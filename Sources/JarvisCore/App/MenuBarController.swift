@@ -18,6 +18,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     private let spotify: SpotifySearch
     private let brain: Brain
     private let actionLog: ActionLog
+    /// Set by the app once the spend guard exists; shown as a line in the menu.
+    public var budget: Budget?
     private let googleAuth: GoogleAuth
     private let notion: NotionClient
     private let briefing: BriefingService
@@ -82,6 +84,11 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         let status = NSMenuItem(title: statusLine, action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
+        if let budget {
+            let spend = NSMenuItem(title: "Spend: \(budget.summary)", action: nil, keyEquivalent: "")
+            spend.isEnabled = false
+            menu.addItem(spend)
+        }
         if !config.errors.isEmpty {
             for e in config.errors {
                 let item = NSMenuItem(title: "⚠︎ \(e)", action: nil, keyEquivalent: "")
