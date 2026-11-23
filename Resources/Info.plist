@@ -40,9 +40,9 @@
     <string>Jarvis switches modes in the background based on where you are. Location stays on this Mac and is never sent to Claude.</string>
     <key>NSContactsUsageDescription</key>
     <string>Jarvis looks up a person's email address or phone number when you ask it to write to them. Only the matching name, email and phone are read.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Jarvis takes one picture when you ask it to look at something. The camera is never on otherwise, and the picture is not saved.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Jarvis controls apps like Music, Finder and Notes when you ask it to.</string>
-    <key>NSContactsUsageDescription</key>
-    <string>Jarvis uses contacts only to address email drafts you ask for.</string>
 </dict>
 </plist>

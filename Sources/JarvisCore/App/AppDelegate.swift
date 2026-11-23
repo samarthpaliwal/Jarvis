@@ -22,6 +22,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var restartedAfterCrash = false
     public private(set) var budget: Budget!
     public private(set) var contacts: ContactBook!
+    public private(set) var frames: FrameSources!
+    public private(set) var glasses: PushedFrameSource!
     private var termSource: DispatchSourceSignal?
     public private(set) var calendar: CalendarService!
     public private(set) var notion: NotionClient!
@@ -166,6 +168,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                              model: config.profile.local?.model ?? "qwen3.5:9b")
         let drafts = DraftLedger()
         contacts = ContactBook(system: MacContacts())
+        // Camera now; "glasses" is the hook a bridge will push frames into (remote-access phase).
+        glasses = PushedFrameSource(name: "glasses")
+        frames = FrameSources([CameraFrameSource(), glasses], default: "camera")
         dispatcher.register([
             SystemStatusTool(), OpenAppTool(), SetVolumeTool(), MusicTool(spotify: spotify), SetTimerTool(service: timers),
             FileSearchTool(), FileReadTool(), RunShellTool(), GetLocationContextTool(), SetModeTool(),
@@ -177,7 +182,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             SetBrightnessTool(), SetFocusTool(), RememberPlaceTool(detector: context),
             OrganizeFolderTool(log: moveLog), AppHealthTool(), RestartAppTool(), PerformanceReportTool(), ClearCachesTool(),
             MemoryTool(store: memory), MemorySearchTool(store: memory), WeatherTool(world: world), NewsHeadlinesTool(world: world),
-            UseSkillTool(library: skills), ContactsTool(book: contacts),
+            UseSkillTool(library: skills), ContactsTool(book: contacts), LookTool(sources: frames),
         ])
         // Every paid call goes through one spend guard: a daily cap, a per-minute rate limit, and a ledger.
         budget = Budget(limits: config.tuning.budgetLimits, pricing: config.profile.pricing ?? Pricing())

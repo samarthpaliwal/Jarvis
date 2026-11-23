@@ -122,7 +122,8 @@ public final class Brain: ObservableObject {
         defer {
             // A newer turn may have started while this one awaited the network or a tool; only the
             // latest turn writes history, and always as a complete tool_use/tool_result sequence.
-            if myGeneration == generation { history = Self.sanitized(convo) }
+            // Keep only the newest picture: each one costs tokens on every later request.
+            if myGeneration == generation { history = Self.keepingLatestImages(Self.sanitized(convo), count: 1) }
         }
         let mode = modes.current
         var (stable, volatile) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
@@ -256,13 +257,47 @@ public final class Brain: ObservableObject {
                 }
                 let result = await dispatcher.call(name, input: input, source: .user)
                 if let card = result.card { turn.cards.append(card) }
-                results.append(["type": "tool_result", "tool_use_id": use["id"] as? String ?? "",
-                                "content": result.content, "is_error": result.isError])
+                results.append(Self.toolResultBlock(id: use["id"] as? String ?? "", result))
             }
             convo.append(["role": "user", "content": results])
             if Task.isCancelled { return turn }   // results are recorded, so the history stays valid
         }
         return turn
+    }
+
+    // MARK: Pictures in tool results
+
+    /// A tool result for the API: plain text, or text plus pictures when the tool attached any.
+    nonisolated static func toolResultBlock(id: String, _ result: ToolResult) -> JSONObject {
+        guard !result.images.isEmpty else {
+            return ["type": "tool_result", "tool_use_id": id, "content": result.content, "is_error": result.isError]
+        }
+        var content: [JSONObject] = [["type": "text", "text": result.content]]
+        for image in result.images {
+            content.append(["type": "image", "source": ["type": "base64", "media_type": image.mediaType, "data": image.data.base64EncodedString()]])
+        }
+        return ["type": "tool_result", "tool_use_id": id, "content": content, "is_error": result.isError]
+    }
+
+    nonisolated static let imageGone = "[An earlier picture was here. It is no longer available; use look again if you need to see.]"
+
+    /// Replaces all but the newest `count` pictures in the history with a short note.
+    nonisolated static func keepingLatestImages(_ messages: [JSONObject], count: Int) -> [JSONObject] {
+        var remaining = count
+        var out = messages
+        for i in out.indices.reversed() {
+            guard var blocks = out[i]["content"] as? [JSONObject] else { continue }
+            var changed = false
+            for j in blocks.indices.reversed() {
+                guard blocks[j]["type"] as? String == "tool_result", var inner = blocks[j]["content"] as? [JSONObject] else { continue }
+                for k in inner.indices.reversed() where inner[k]["type"] as? String == "image" {
+                    if remaining > 0 { remaining -= 1 } else { inner[k] = ["type": "text", "text": imageGone]; changed = true }
+                }
+                blocks[j]["content"] = inner
+            }
+            if changed { out[i]["content"] = blocks }
+        }
+        return out
     }
 
     // MARK: Cache pre-warm
@@ -361,7 +396,9 @@ public final class Brain: ObservableObject {
                 switch b["type"] as? String {
                 case "text": return ((b["text"] as? String) ?? "").isEmpty ? nil : b
                 case "tool_result":
-                    if ((b["content"] as? String) ?? "").isEmpty { b["content"] = "(no output)" }
+                    // Content is a string, or a list of blocks when a picture is attached. Only an empty one is replaced.
+                    if let list = b["content"] as? [JSONObject] { if list.isEmpty { b["content"] = "(no output)" } }
+                    else if ((b["content"] as? String) ?? "").isEmpty { b["content"] = "(no output)" }
                     return b
                 default: return b
                 }

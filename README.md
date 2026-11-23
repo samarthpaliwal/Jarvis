@@ -537,6 +537,7 @@ outcome, duration). *What Did You Do Today?* in the menu and the `actions_today`
 | 0 automatic (cont.) | | `app_health`, `performance_report` |
 | 1 free (calendar) | undoable; asks first if other people are invited | `calendar_move` |
 | 1 free (people) | undoable | `contacts` (find, save, remove, list) |
+| 1 free (camera) | user requests only; asks first after outside content | `look` |
 | 2 approve | preview + explicit yes | `run_shell` (zsh, 30 s timeout, minimal env, never sudo), `restart_app`, `clear_caches`, `calendar_cancel`, `email_send` |
 | 3 never | denylist.json + hard-coded floor | — |
 
@@ -550,6 +551,28 @@ schema, `targets(for:)`, `run`), then add it to the `register([...])` list in `A
 The dispatcher handles denylist, approval, logging, and the undo stack.
 
 The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
+
+## Vision: looking on demand
+
+"Hey Jarvis, what am I holding?" takes one picture with the Mac's camera and shows it to Claude.
+
+- **On demand only.** The `look` tool runs only inside a live request from you. A briefing, a timer, or a
+  mode change can never trigger it; the dispatcher refuses.
+- **One frame.** The camera opens, exposure settles for about half a second, one frame is taken, and the
+  camera closes. macOS shows its green indicator while it is on.
+- **Where the picture goes.** It is scaled to 1280 pixels, sent to Claude with your question, and kept in
+  RAM for the rest of that chat so you can ask a follow-up. It is never written to disk or to any log, and
+  only the newest picture stays in the conversation.
+- **Outside content.** If the request read an email or a web page before reaching for the camera, Jarvis
+  asks first and says why.
+- **Permission.** macOS asks for camera access the first time. Deny it and everything else keeps working.
+- **People.** Jarvis describes what it sees and does not identify real people from their faces.
+- **Private Mode** has no vision: the local model cannot see.
+
+Frames come from a `FrameSource` ([Vision/FrameSource.swift](Sources/JarvisCore/Vision/FrameSource.swift)).
+`camera` is the Mac's camera. `glasses` is a `PushedFrameSource`: a bridge pushes its newest frame and
+`look` with `source: "glasses"` reads it, refusing anything older than ten seconds. Nothing feeds it yet;
+that is the hook for the remote-access phase.
 
 ## Memory: what Jarvis remembers, and for how long
 
@@ -805,6 +828,16 @@ Unit tests write to a temporary folder, never to these files.
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.11.0 — Upgrade phase 3: features (2026-11-22)
+- **Calendar:** `calendar_move` (undoable) and `calendar_cancel` (always approved). Events are found by
+  title and day; changes that would notify invitees ask first.
+- **Chains:** multi-step requests with a spoken yes before anything irreversible. `email_send` sends a
+  draft Jarvis created, after an approval that reads back the real recipient and subject. Approvals say
+  when outside content was read first.
+- **Memory:** a short RAM-only recap across chats, and a contact book with a macOS Contacts fallback.
+- **Vision:** `look` takes one camera frame on request; a `glasses` frame source is ready for a bridge.
+- 238 tests.
 
 ### 0.10.0 — Upgrade phases 1 and 2: architecture and reliability (2026-11-22)
 - **Architecture:** five stages behind interfaces (wake, speech-to-text, intent, actions, speech-out), one

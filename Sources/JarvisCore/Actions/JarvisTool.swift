@@ -14,6 +14,13 @@ public struct ToolTargets: Equatable, Sendable {
     }
 }
 
+/// A picture a tool hands to the model alongside its text.
+public struct ToolImage: Sendable, Equatable {
+    public var data: Data
+    public var mediaType: String
+    public init(data: Data, mediaType: String) { self.data = data; self.mediaType = mediaType }
+}
+
 public struct ToolResult: Sendable {
     /// Text handed back to Claude.
     public var content: String
@@ -22,6 +29,8 @@ public struct ToolResult: Sendable {
     /// Optional card for the notch.
     public var card: NotchCard?
     public var isError: Bool
+    /// Pictures for the model to look at (the camera). Never logged, never written to disk.
+    public var images: [ToolImage] = []
 
     public init(_ content: String, summary: String? = nil, card: NotchCard? = nil, isError: Bool = false) {
         self.content = content; self.summary = summary; self.card = card; self.isError = isError
@@ -46,6 +55,9 @@ public protocol JarvisTool: AnyObject {
     var name: String { get }
     var description: String { get }
     var tier: Tier { get }
+    /// True for tools that may only run inside a live request from the user (the camera). The dispatcher
+    /// refuses them from briefings, timers, and mode changes, whatever their tier.
+    var userOnly: Bool { get }
     /// JSON Schema for `input` (object). Keep it tight; Claude follows it.
     var inputSchema: JSONObject { get }
     /// What this call will touch, derived from the input. Checked before approval and execution.
@@ -62,6 +74,7 @@ public protocol JarvisTool: AnyObject {
 }
 
 public extension JarvisTool {
+    var userOnly: Bool { false }
     func targets(for input: JSONObject) -> ToolTargets { ToolTargets() }
     func preview(for input: JSONObject) -> String {
         let args = input.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ")

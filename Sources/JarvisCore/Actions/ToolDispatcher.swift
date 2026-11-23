@@ -137,6 +137,10 @@ public final class ToolDispatcher {
             JarvisLog.warn("Denylist refused \(name): \(error)")
             return .error(DispatchError.denied("\(error)").localizedDescription)
         }
+        if tool.userOnly, source != .user {
+            record("refused", tier: tool.tier, summary: "user-only tool from \(source.rawValue)")
+            return .error("\(name) only runs when Sam asks for it directly.")
+        }
         let mode = context.modes.current
         guard Self.allowed(name, in: mode) else {
             record("denied", tier: tool.tier, summary: "mode \(mode.id)")
