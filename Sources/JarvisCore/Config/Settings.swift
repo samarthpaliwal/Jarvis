@@ -163,6 +163,17 @@ public struct Tuning: Codable, Equatable, Sendable {
     /// or "never" (refuse).
     public var unverifiedVoiceApproval: String = "button"
 
+    // Remote access
+    /// The port the remote API listens on, on the Tailscale address only.
+    public var remotePort: Int = 8787
+    /// Where the remote API listens: "tailscale" (this Mac's tailnet address) or "loopback" (127.0.0.1, for
+    /// testing or behind `tailscale serve`). There is no setting that listens on every address.
+    public var remoteBind: String = "tailscale"
+    /// The longest recording one remote request may carry, in seconds.
+    public var remoteMaxAudioSeconds: Double = 60
+    /// A remote approval that gets no answer in this long counts as "no".
+    public var remoteApprovalTimeoutSeconds: Double = 60
+
     // Stability
     /// If the main thread does not respond for this many seconds, Jarvis exits so the supervisor restarts it. 0 = off.
     public var hangTimeoutSeconds: Double = 30
@@ -245,6 +256,10 @@ public struct Tuning: Codable, Equatable, Sendable {
         speakerThreshold = try c.decodeIfPresent(Double.self, forKey: .speakerThreshold) ?? speakerThreshold
         unverifiedVoiceApproval = try c.decodeIfPresent(String.self, forKey: .unverifiedVoiceApproval) ?? unverifiedVoiceApproval
         hangTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .hangTimeoutSeconds) ?? hangTimeoutSeconds
+        remotePort = try c.decodeIfPresent(Int.self, forKey: .remotePort) ?? remotePort
+        remoteBind = try c.decodeIfPresent(String.self, forKey: .remoteBind) ?? remoteBind
+        remoteMaxAudioSeconds = try c.decodeIfPresent(Double.self, forKey: .remoteMaxAudioSeconds) ?? remoteMaxAudioSeconds
+        remoteApprovalTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .remoteApprovalTimeoutSeconds) ?? remoteApprovalTimeoutSeconds
         videoMaxSeconds = try c.decodeIfPresent(Double.self, forKey: .videoMaxSeconds) ?? videoMaxSeconds
         speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn
         followUpGuardMilliseconds = try c.decodeIfPresent(Double.self, forKey: .followUpGuardMilliseconds) ?? followUpGuardMilliseconds

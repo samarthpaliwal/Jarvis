@@ -95,6 +95,7 @@ Sources/JarvisCore/
   TTS/                     Stage 5: SpeechOutput interface, Apple / Kokoro / ElevenLabs / OpenAI engines, sentence chunker
   App/                     AppDelegate (wiring), menu bar, mode manager, debug hooks
   Config/                  JSON models, tuning and environment overrides, Keychain store
+  Remote/                  Remote access: Tailscale address, HTTP server, tokens, the API, headless turns
   Logging/                 jarvis.log, trace.jsonl, request tracing
   NotchUI/                 Panel, floating card, HUD, SwiftUI views, view model
   Integrations/            EventKit calendar/reminders, Google OAuth + Gmail, Notion API, briefing, weather
@@ -554,6 +555,94 @@ Things worth knowing:
   tailnet can reach them, over an encrypted WireGuard tunnel.
 - Do not turn on Tailscale Funnel for anything Jarvis serves. Jarvis never does.
 
+### Step 2: the remote API
+
+A small HTTP API inside Jarvis that wraps the same pipeline as the microphone: it takes a recording (or
+text), runs speech-to-text, Claude, the tools, and text-to-speech, and returns the reply as text and audio.
+It is written in Swift and lives in the app (`Sources/JarvisCore/Remote/`), not in a separate Python
+service, so it runs the real stages rather than a copy of them.
+
+**Turning it on.** It is off until you switch it on, and even then it listens only when both of these are
+true: at least one device has a token, and this Mac has a Tailscale address.
+
+1. Jarvis menu → *Remote Access* → *Allow Remote Access over Tailscale*.
+2. *Remote Access* → *Create Access Token…*, name the device ("Sam's iPhone"). The token is shown once.
+   From a terminal: `build/Jarvis.app/Contents/MacOS/Jarvis --remote-token "Sam's iPhone"`
+   (`--remote-tokens` lists them, `--remote-revoke <name>` removes one).
+
+The menu's first line says where it is listening (`Listening on 100.x.y.z:8787`), or why it is not.
+
+**Where it listens.** On this Mac's Tailscale address and nothing else: not `0.0.0.0`, not the Wi-Fi
+address, not `localhost`. If Tailscale is off, it does not listen at all, and it follows Tailscale coming
+and going. Connections from addresses outside the tailnet range are dropped before a byte is read. There
+is no setting that makes it listen on every address (`remoteBind` accepts `tailscale` or `loopback`; anything
+else means `tailscale`).
+
+**The token.** Every request needs `Authorization: Bearer <token>`. Without a valid one the answer is
+`401` for every path, whether or not the path exists, and the request body is not read. Five wrong tokens
+in a minute from one device lock that device out for five minutes. Jarvis stores only a SHA-256 of each
+token (`~/Library/Application Support/Jarvis/remote/tokens.json`, owner-only, on the tool denylist), so the
+file does not let anyone in. Each device gets its own token; revoke one in the menu and it stops working
+at once. Revoking the last one closes the port.
+
+**Routes**
+
+| | | |
+|---|---|---|
+| `GET /v1/status` | | Is Jarvis there, is it busy, are the keys unlocked, is Voice ID set up. |
+| `POST /v1/ask` | a recording (WAV or M4A, up to 60 s), or `{"text": "…"}` | Runs the request. |
+| `POST /v1/approve?id=…` | a recording of "yes" or "no", or `{"id": "…", "decision": "yes"}` | Answers an approval. |
+
+```bash
+TOKEN=…   # from Create Access Token
+MAC=100.x.y.z
+
+curl -s -H "Authorization: Bearer $TOKEN" http://$MAC:8787/v1/status
+
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"text": "what is left today?", "audio": false}' http://$MAC:8787/v1/ask
+
+say -o ask.wav --data-format=LEI16@16000 "What is seven times eight?"
+curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: audio/wav' --data-binary @ask.wav http://$MAC:8787/v1/ask
+```
+
+A reply:
+
+```json
+{"status": "done", "request_id": "r-15778b", "transcript": "What is 7 times 8?",
+ "text": "Seven times eight is fifty-six.", "tools": [],
+ "audio": {"mime": "audio/wav", "base64": "UklGR…"}}
+```
+
+Add `?audio=0` (or `"audio": false`) to get text only. `409` means Jarvis is busy with another request;
+`422` means nothing was heard.
+
+**What a remote request can and cannot do**
+
+- It is silent on the Mac: nothing is shown and nothing is spoken there. It is logged like any other
+  request (`jarvis.log`, `trace.jsonl` with source `remote`, `actions.log`, `conversations.log`).
+- One request at a time, shared with the Mac. If someone is talking to Jarvis at the Mac, a remote request
+  gets `409`; while a remote request runs, the wake word waits.
+- Everything that is free for a spoken request is free remotely. Everything on the Tier 3 list is refused,
+  as always.
+- **Anything that needs approval (email, messages, deleting, shell commands, money) needs your voice.**
+  Nobody is at the Mac to press Approve, so the request must be a recording, Voice ID must be set up, and
+  the voice must be yours. Then the reply is `"status": "needs_approval"` with the exact action, and the
+  action waits (60 s) for `POST /v1/approve`. A typed request, an unrecognized voice, or a Mac without Voice
+  ID gets a refusal instead, and the reply says why. There is no setting to relax this.
+- After a restart the saved keys are locked until Touch ID (see *Keys*). A remote request then gets a
+  reply saying so. If you want Jarvis to recover unattended, turn off *Keys → Require Touch ID to Unlock*.
+
+**Check it**
+
+```bash
+scripts/tailscale-check.sh      # “remote API is listening on 100.x.y.z:8787 and refuses requests without a token”
+swift test --filter "Remote|HTTP|AudioCodec|Tailnet"   # API, tokens, server, audio, remote approval rules
+```
+
+Settings (`profile.json → tuning`, or `JARVIS_…` in `jarvis.env`): `remotePort` 8787, `remoteBind`
+`tailscale`, `remoteMaxAudioSeconds` 60, `remoteApprovalTimeoutSeconds` 60.
+
 ## Keys: Touch ID instead of the keychain password
 
 Jarvis keeps its API keys and tokens (Claude, Google, Notion, Spotify, ElevenLabs, OpenAI) in the macOS
@@ -1005,6 +1094,14 @@ Unit tests write to a temporary folder, never to these files.
 - Ad-hoc signing resets permission grants on each build (see *Code signing*).
 
 ## Changelog
+
+### 0.13.0 — Upgrade phase 5: remote access (2026-11-23)
+- **Tailscale:** setup walkthrough and `scripts/tailscale-check.sh`.
+- **Remote API:** `/v1/status`, `/v1/ask`, `/v1/approve`, inside the app, bound to the Tailscale address
+  only, with a per-device token on every request. Off by default. A remote request runs the same stages as
+  a spoken one and returns text and audio; nothing is shown or said on the Mac.
+- **Remote approvals need a verified voice.** No Voice ID, a typed request, or someone else's voice: refused.
+- A copy of Jarvis opened by hand now hands over to the launchd supervisor.
 
 ### 0.12.1 — Touch ID for the saved keys (2026-11-23)
 - **No more keychain password prompts.** A small, never-rebuilt helper (`jarvis-keyhelper`) holds the saved

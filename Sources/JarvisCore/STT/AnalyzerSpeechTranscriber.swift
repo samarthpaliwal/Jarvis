@@ -159,6 +159,17 @@ public final class AnalyzerSpeechTranscriber: Transcriber, @unchecked Sendable {
         }
     }
 
+    private var isAcceptingAudio: Bool { lock.lock(); defer { lock.unlock() }; return analyzerFormat != nil && input != nil }
+
+    public func waitUntilAcceptingAudio(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if isAcceptingAudio { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return false
+    }
+
     public func finish() {
         lock.lock()
         let continuation = input

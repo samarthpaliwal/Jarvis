@@ -117,6 +117,46 @@ public final class AppleSpeechOutput: NSObject, SpeechOutput, AVSpeechSynthesize
         return u
     }
 
+    /// Synthesizes `text` into a WAV without playing it.
+    public func render(_ text: String, rate: Float) async throws -> (data: Data, mime: String) {
+        let u = utterance(text, volume: 1, rate: rate)
+        let renderer = AVSpeechSynthesizer()
+        final class Collector: @unchecked Sendable {
+            let lock = NSLock()
+            var samples: [Float] = []
+            var sampleRate = 22_050.0
+            var continuation: CheckedContinuation<Void, Error>?
+            func finish(_ result: Result<Void, Error>) {
+                lock.lock(); let c = continuation; continuation = nil; lock.unlock()
+                c?.resume(with: result)
+            }
+            func snapshot() -> ([Float], Double) { lock.lock(); defer { lock.unlock() }; return (samples, sampleRate) }
+        }
+        let collector = Collector()
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            collector.continuation = cont
+            renderer.write(u) { buffer in
+                guard let pcm = buffer as? AVAudioPCMBuffer else { return }
+                // An empty buffer marks the end.
+                guard pcm.frameLength > 0 else { collector.finish(.success(())); return }
+                let n = Int(pcm.frameLength)
+                collector.lock.lock()
+                collector.sampleRate = pcm.format.sampleRate
+                if let f = pcm.floatChannelData { collector.samples.append(contentsOf: UnsafeBufferPointer(start: f[0], count: n)) }
+                else if let i = pcm.int16ChannelData { collector.samples.append(contentsOf: UnsafeBufferPointer(start: i[0], count: n).map { Float($0) / 32768 }) }
+                else if let i = pcm.int32ChannelData { collector.samples.append(contentsOf: UnsafeBufferPointer(start: i[0], count: n).map { Float($0) / 2_147_483_648 }) }
+                collector.lock.unlock()
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 45) {
+                collector.finish(.failure(NSError(domain: "Jarvis.TTS", code: 2, userInfo: [NSLocalizedDescriptionKey: "the Apple voice did not finish"])))
+            }
+        }
+        _ = renderer   // alive until the last buffer
+        let (samples, sampleRate) = collector.snapshot()
+        guard !samples.isEmpty else { throw NSError(domain: "Jarvis.TTS", code: 3, userInfo: [NSLocalizedDescriptionKey: "the Apple voice produced no audio"]) }
+        return (AudioCodec.wav(samples, sampleRate: Int(sampleRate)), "audio/wav")
+    }
+
     public func speak(_ text: String, volume: Float, rate: Float, onFinished: @escaping (Bool) -> Void) {
         stop()
         completion = onFinished

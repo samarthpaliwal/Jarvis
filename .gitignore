@@ -23,5 +23,8 @@ logs/
 *.db-wal
 *.db-shm
 voiceprint/
+# Remote access tokens (hashes) live outside the repo; never commit a copy
+tokens.json
+remote/tokens*
 *.embedding
 *.npy

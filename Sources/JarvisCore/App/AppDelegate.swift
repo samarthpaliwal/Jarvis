@@ -20,6 +20,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var timers: TimerService!
     public private(set) var actionLog: ActionLog!
     private var restartedAfterCrash = false
+    public private(set) var remote: RemoteAccess!
     /// This very process was started by the launchd agent.
     private var supervisedByLaunchd = false
     private var unlockingKeys = false
@@ -241,6 +242,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         conversation.onFirstWord = { [weak self] in self?.brain.prewarmIfCold() }
         conversation.voiceID = voiceID
         conversation.onKeysNeeded = { [weak self] in self?.unlockKeys() }
+        // Remote access: off until switched on, and then only on the Tailscale address.
+        let speechLocale = Locale(identifier: config.profile.speech?.locale ?? "en-US")
+        remote = RemoteAccess(config: config, tokens: RemoteTokenStore(),
+                              backend: LiveRemoteBackend(conversation: conversation, config: config, modes: modes, router: voice, voiceID: voiceID,
+                                                         makeTranscriber: { TranscriberFactory.make(locale: speechLocale) }))
+        remote.start()
         // A frozen main thread is not a crash, so launchd would never notice. This does.
         let supervised = supervisedByLaunchd
         hangWatchdog = HangWatchdog(timeout: config.tuning.hangTimeoutSeconds) { silent in
@@ -333,6 +340,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.camera = camera
         menuBar.voiceID = voiceID
         menuBar.keys = self
+        menuBar.remote = remote
         menuBar.onEnrollVoice = { [weak self] in self?.startVoiceEnrollment() }
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() != nil ? "present" : SecretVault.shared.usesHelper && SecretVault.shared.state != .unlocked ? "locked until Touch ID" : "MISSING")")
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
@@ -356,6 +364,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!prewarm" { self.brain.prewarmIfCold(force: true); return }   // silent: no HUD, no speech
                                             if q.hasPrefix("!camera") { self.cameraDebug(q); return }               // drives the camera without a model turn
                                             if q == "!voiceid enroll" { self.startVoiceEnrollment(); return }
+                                            if q.hasPrefix("!remote") {      // loopback: listen on 127.0.0.1 for this run only (testing); off: back to the settings
+                                                self.remote.bindOverride = q.hasSuffix("loopback") ? "loopback" : nil
+                                                JarvisLog.info("Debug: remote access is \(self.remote.state.line)")
+                                                return
+                                            }
                                             if q == "!hang" { JarvisLog.warn("Debug: freezing the main thread on purpose"); Thread.sleep(forTimeInterval: 120); return }
                                             if q == "!brief" {
                                                 Task { let r = await self.briefing.build(mode: self.modes.current); self.conversation.deliver(await self.narrator.narrate(r, kind: "briefing on request"), cards: [.briefing(r.data)]) }
@@ -482,6 +495,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        remote?.stop()
         Supervisor.noteCleanExit()
         wake?.stop()
         kokoro?.stop()

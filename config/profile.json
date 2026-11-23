@@ -192,6 +192,10 @@
     "sessionMemoryMinutes": 30,
     "sessionMemoryExchanges": 6,
     "videoMaxSeconds": 300,
+    "remotePort": 8787,
+    "remoteBind": "tailscale",
+    "remoteMaxAudioSeconds": 60,
+    "remoteApprovalTimeoutSeconds": 60,
     "hangTimeoutSeconds": 30,
     "speakerThreshold": 0.5,
     "unverifiedVoiceApproval": "button"

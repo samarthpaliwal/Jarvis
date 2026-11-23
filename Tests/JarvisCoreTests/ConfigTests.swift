@@ -90,6 +90,21 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(t.llmMaxHistoryMessages, 24)
     }
 
+    /// Every field must be read back from JSON and be overridable. A field added to the struct but not to
+    /// the decoder would silently keep its default.
+    func testEveryTuningFieldCanBeOverridden() throws {
+        let defaults = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(Tuning())) as? [String: Any])
+        var env: [String: String] = [:]
+        for (field, value) in defaults { env[Tuning.envName(for: field)] = value is String ? "changed" : "7" }
+        let r = Tuning().applying(env: env)
+        XCTAssertTrue(r.rejected.isEmpty, "\(r.rejected)")
+        let changed = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(r.tuning)) as? [String: Any])
+        for (field, value) in changed {
+            if value is String { XCTAssertEqual(value as? String, "changed", field) }
+            else { XCTAssertEqual((value as? NSNumber)?.doubleValue, 7, field) }
+        }
+    }
+
     @MainActor func testRepoProfileTuningMatchesCodeDefaults() {
         let store = ConfigStore(directory: ConfigTests.repoConfigDir, env: [:])
         XCTAssertTrue(store.errors.isEmpty, "\(store.errors)")

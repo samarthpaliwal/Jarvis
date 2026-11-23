@@ -24,6 +24,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var camera: CameraController?
     /// Set by the app; adds the Voice ID submenu.
     public var voiceID: SpeakerVerifier?
+    /// Set by the app; adds the Remote Access submenu.
+    public weak var remote: RemoteAccess?
     /// Set by the app; adds the Keys submenu.
     public weak var keys: AppDelegate?
     public var onEnrollVoice: (() -> Void)?
@@ -269,6 +271,34 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
                 let hint = NSMenuItem(title: "Run scripts/install-keyhelper.sh for Touch ID", action: nil, keyEquivalent: "")
                 hint.isEnabled = false
                 sub.addItem(hint)
+            }
+            item.submenu = sub
+            menu.addItem(item)
+        }
+        if let remote {
+            let item = NSMenuItem(title: "Remote Access", action: nil, keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: nil)
+            let sub = NSMenu()
+            let status = NSMenuItem(title: remote.state.line, action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            sub.addItem(status)
+            let toggle = ClosureMenuItem(title: "Allow Remote Access over Tailscale", symbol: nil) { remote.isEnabled.toggle() }
+            toggle.state = remote.isEnabled ? .on : .off
+            sub.addItem(toggle)
+            sub.addItem(.separator())
+            sub.addItem(ClosureMenuItem(title: "Create Access Token…", symbol: "key") { [weak self] in self?.createRemoteToken(remote) })
+            let tokens = remote.tokens.all
+            if !tokens.isEmpty {
+                let f = RelativeDateTimeFormatter()
+                for t in tokens {
+                    let used = t.lastUsed.map { "used \(f.localizedString(for: $0, relativeTo: Date()))" } ?? "never used"
+                    let row = NSMenuItem(title: "\(t.name) · \(used)", action: nil, keyEquivalent: "")
+                    let rowMenu = NSMenu()
+                    rowMenu.addItem(ClosureMenuItem(title: "Revoke", symbol: "xmark.circle") { remote.tokens.revoke(name: t.name); remote.refresh() })
+                    row.submenu = rowMenu
+                    sub.addItem(row)
+                }
+                sub.addItem(ClosureMenuItem(title: "Revoke All Tokens", symbol: "xmark.circle") { remote.tokens.revokeAll(); remote.refresh() })
             }
             item.submenu = sub
             menu.addItem(item)
@@ -699,6 +729,44 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
 }
 
 /// NSMenuItem that runs a closure. Keeps the menu code free of selector plumbing.
+extension MenuBarController {
+    /// Asks which device the token is for, makes it, and shows it once.
+    func createRemoteToken(_ remote: RemoteAccess) {
+        let ask = NSAlert()
+        ask.messageText = "Create an access token"
+        ask.informativeText = "Which device is it for? Each device gets its own token, so one can be revoked without the others."
+        ask.addButton(withTitle: "Create"); ask.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.placeholderString = "Sam's iPhone"
+        ask.accessoryView = field
+        ask.window.initialFirstResponder = field
+        guard ask.runFocusedModal() == .alertFirstButtonReturn else { return }
+        let token: String
+        do { token = try remote.tokens.create(name: field.stringValue) }
+        catch {
+            let failed = NSAlert()
+            failed.messageText = "No token was created"
+            failed.informativeText = error.localizedDescription
+            _ = failed.runFocusedModal()
+            return
+        }
+        remote.refresh()
+        let show = NSAlert()
+        show.messageText = "Token for “\(field.stringValue.trimmingCharacters(in: .whitespaces))”"
+        show.informativeText = "This is the only time it is shown. Put it on that device and nowhere else. Anyone on your tailnet who has it can talk to Jarvis as you."
+        let text = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        text.stringValue = token
+        text.isEditable = false; text.isSelectable = true
+        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        show.accessoryView = text
+        show.addButton(withTitle: "Copy and Close"); show.addButton(withTitle: "Close")
+        if show.runFocusedModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(token, forType: .string)
+        }
+    }
+}
+
 final class ClosureMenuItem: NSMenuItem {
     private let handler: () -> Void
 

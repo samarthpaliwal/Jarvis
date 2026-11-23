@@ -8,6 +8,8 @@ struct JarvisMain {
     static func main() {
         // `Jarvis --install-agent` and friends manage the launchd supervisor, then exit.
         Supervisor.handleCommandLine()
+        // `Jarvis --remote-token <device>` and friends manage remote access tokens, then exit.
+        RemoteAccess.handleCommandLine()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

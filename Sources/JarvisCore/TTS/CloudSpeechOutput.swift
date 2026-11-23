@@ -76,7 +76,7 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
         guard !t.isEmpty else { return }
         let fetch = Task { () -> (data: Data, synthMs: Double, readyAt: Date) in
             let started = Date()
-            let data = try await (self.synthesizerOverride ?? self.synthesize)(t)
+            let data = try await (self.synthesizerOverride ?? { try await self.synthesize($0) })(t)
             return (data, Date().timeIntervalSince(started) * 1000, Date())
         }
         queue.append(Item(text: t, volume: volume, audio: fetch))
@@ -190,12 +190,19 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
         }
     }
 
-    private func synthesize(_ text: String) async throws -> Data {
+    /// The audio for `text` without playing it (the remote API sends it to the phone instead).
+    public func render(_ text: String, timeout: TimeInterval = 45) async throws -> (data: Data, mime: String) {
+        let data = try await synthesize(text, timeout: timeout)
+        return (data, provider == .kokoro ? "audio/wav" : "audio/mpeg")
+    }
+
+    private func synthesize(_ text: String, timeout: TimeInterval? = nil) async throws -> Data {
+        if let synthesizerOverride, timeout != nil { return try await synthesizerOverride(text) }
         let paid = provider != .kokoro
         if paid { try Self.budget?.check(provider.rawValue) }
         let (base, why) = requestBody()
         guard var req = base else { throw NSError(domain: "Jarvis.TTS", code: 1, userInfo: [NSLocalizedDescriptionKey: why]) }
-        req.timeoutInterval = Self.requestTimeout
+        req.timeoutInterval = timeout ?? Self.requestTimeout
         req.httpBody = try JSONSerialization.data(withJSONObject: payload(for: text))
         let (data, resp) = try await (provider == .kokoro ? Self.localSession : URLSession.shared).data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -290,5 +297,15 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
     public func stop() {
         cloud?.stop()
         apple.stop()
+    }
+
+    /// The reply as audio data instead of sound from the Mac's speakers. Same engine choice as speaking:
+    /// the configured voice, and the Apple voice when that fails or is offline.
+    public func render(_ text: String, rate: Float) async throws -> (data: Data, mime: String) {
+        if let cloud, cloud.provider == .kokoro || isOnline() {
+            do { return try await cloud.render(text) }
+            catch { JarvisLog.warn("Remote speech: \(cloud.provider.rawValue) failed (\(error.localizedDescription)); using the Apple voice") }
+        }
+        return try await apple.render(text, rate: rate)
     }
 }

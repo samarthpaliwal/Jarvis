@@ -595,6 +595,7 @@ public final class ConversationController: ObservableObject {
     /// Called by the dispatcher. Shows the card, asks aloud, and listens for yes/no (12 s).
     public func requestApproval(_ request: ApprovalRequest) async -> Bool {
         if let p = pendingApproval { pendingApproval = nil; p.continuation.resume(returning: false) }
+        if remote != nil { return await requestRemoteApproval(request) }
         // Whose voice asked for this? With Voice ID on, a spoken "yes" only counts from the enrolled voice.
         let gate = await voiceGate()
         if case .refuse(let why) = gate {
@@ -660,10 +661,10 @@ public final class ConversationController: ObservableObject {
     private func handleApprovalSpeech(_ text: String) {
         // Never take an answer while Jarvis's own voice is in the air.
         guard let p = pendingApproval, !speech.isSpeaking else { return }
-        let words = Set(text.lowercased().replacingOccurrences(of: ",", with: " ").replacingOccurrences(of: ".", with: " ").split(separator: " ").map(String.init))
-        if !words.isDisjoint(with: ["no", "nope", "deny", "cancel", "don't", "dont", "stop"]) {
+        guard let answer = Self.approvalAnswer(text) else { return }
+        if !answer {
             resolveApproval(id: p.request.id, approved: false, reason: "voice")
-        } else if !words.isDisjoint(with: ["yes", "yeah", "yep", "approve", "approved", "go", "ok", "okay", "sure", "do"]) {
+        } else {
             guard approvalGate.acceptsSpokenYes else {
                 // Voice ID is on and this request was not verified: a spoken yes is not enough.
                 if !toldAboutButton {
@@ -677,6 +678,16 @@ public final class ConversationController: ObservableObject {
         }
     }
 
+    /// Reads a spoken answer to an approval: true for yes, false for no, nil when it is neither.
+    /// Any "no" word wins over a "yes" word in the same breath.
+    nonisolated static func approvalAnswer(_ text: String) -> Bool? {
+        let cleaned = text.lowercased().map { $0.isLetter || $0 == "'" || $0 == "’" ? $0 : " " }
+        let words = Set(String(cleaned).replacingOccurrences(of: "’", with: "'").split(separator: " ").map(String.init))
+        if !words.isDisjoint(with: ["no", "nope", "deny", "cancel", "don't", "dont", "stop"]) { return false }
+        if !words.isDisjoint(with: ["yes", "yeah", "yep", "approve", "approved", "go", "ok", "okay", "sure", "do"]) { return true }
+        return nil
+    }
+
     private func resolveApproval(id: UUID, approved: Bool, reason: String = "button") {
         guard let p = pendingApproval, p.request.id == id else { return }
         pendingApproval = nil
@@ -688,6 +699,163 @@ public final class ConversationController: ObservableObject {
         JarvisLog.info("Approval \(approved ? "GRANTED" : "DENIED") via \(reason): \(p.request.preview)")
         transition(.approvalResolved)
         p.continuation.resume(returning: approved)
+    }
+
+    // MARK: Remote turns (no screen, no speaker)
+
+    /// A request that came in over the remote API. It runs through the same intent and action stages as a
+    /// spoken one, but nothing is shown or said on the Mac: the reply goes back to the caller.
+    ///
+    /// One request at a time, shared with the local pipeline: if Jarvis is busy at the Mac, a remote
+    /// request is told so, and the wake word is ignored while a remote request is running.
+    public func remoteAsk(_ text: String, voice: VoiceCheck?) async -> RemoteTurnResult {
+        guard state == .idle, !isEnrolling, remote == nil else { return RemoteTurnResult(status: .busy) }
+        turn += 1
+        lastTurn = TurnStats(transcript: text)
+        speechEndedAt = Date()
+        let request = beginRequest(source: "remote")
+        request.event(.transcribed, "speech_end", ["reason": voice == nil ? "remote_typed" : "remote_audio", "chars": text.count])
+        if let voice, voice.isEnforced {
+            var fields: [String: Any] = ["outcome": voice.outcome.rawValue, "seconds": (voice.seconds * 10).rounded() / 10]
+            if let s = voice.score { fields["score"] = (s * 100).rounded() / 100 }
+            request.event(.transcribed, "voice_id", fields)
+            request.set("speaker", fields)
+        }
+        utterance.discard()
+        currentVoiceCheck = nil
+        transition(.typed)
+        remote = RemoteTurn(request: request, voice: voice)
+        return await withCheckedContinuation { cont in
+            remote?.waiter = cont
+            replyTask?.cancel()
+            replyTask = Task { [weak self] in
+                await RequestTrace.$current.withValue(request) { await self?.respondRemote(to: text) }
+            }
+        }
+    }
+
+    /// Answers the approval a remote request is waiting on. Nil when nothing is waiting under that id
+    /// (it was answered, it timed out, or the request was stopped at the Mac).
+    public func remoteDecide(id: UUID, approved: Bool) async -> RemoteTurnResult? {
+        guard remote != nil, remote?.waiter == nil, let p = pendingApproval, p.request.id == id else { return nil }
+        return await withCheckedContinuation { cont in
+            remote?.waiter = cont
+            resolveApproval(id: id, approved: approved, reason: "remote")
+        }
+    }
+
+    /// True while a remote request is running or waiting for its approval.
+    public var remoteTurnActive: Bool { remote != nil }
+
+    private struct RemoteTurn {
+        let request: RequestTrace
+        let voice: VoiceCheck?
+        var streamed = ""
+        var notes: [String] = []
+        var waiter: CheckedContinuation<RemoteTurnResult, Never>?
+    }
+    private var remote: RemoteTurn?
+
+    private func respondRemote(to text: String) async {
+        lastUserText = text
+        guard let request = remote?.request else { return }
+        var firstDelta = true
+        let apply: @MainActor (String) -> Void = { [weak self] delta in
+            guard let self, self.remote?.request === request else { return }
+            if firstDelta {
+                firstDelta = false
+                request.event(.intent, "first_token")
+            }
+            self.remote?.streamed += delta
+        }
+        let onText: (String) -> Void = { delta in
+            if Thread.isMainThread { MainActor.assumeIsolated { apply(delta) } }
+            else { DispatchQueue.main.async { MainActor.assumeIsolated { apply(delta) } } }
+        }
+        var failed = false
+        var cancelled = false
+        var turn = Brain.Turn()
+        do {
+            let responder = responder
+            turn = try await withDeadline("The request", seconds: config.tuning.turnTimeoutSeconds) { @MainActor in
+                try await responder(text, onText)
+            }
+        } catch is CancellationError {
+            cancelled = true
+        } catch {
+            turn.text = Self.friendly(error)
+            failed = true
+            if case ClaudeClient.ClientError.noAPIKey = error, SecretVault.shared.usesHelper, SecretVault.shared.state != .unlocked { onKeysNeeded?() }
+            request.event(SpokenFailure.stage(of: error), "error", ["error": String(describing: type(of: error)), "message": String(error.localizedDescription.prefix(200))])
+            JarvisLog.error("Brain (remote): \(error.localizedDescription)", request: request.id)
+        }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in DispatchQueue.main.async { c.resume() } }
+        guard remote?.request === request else { return }
+        // Stopped at the Mac (the menu, the close button) while it was running.
+        if Task.isCancelled || state == .idle { cancelled = true }
+        var reply = turn.text.isEmpty ? (remote?.streamed ?? "") : turn.text
+        if failed, let said = remote?.streamed, !said.isEmpty, said != reply { reply = said + " " + reply }
+        for note in remote?.notes ?? [] where !reply.contains(note) { reply += (reply.isEmpty ? "" : " ") + note }
+        if reply.isEmpty, !cancelled { reply = "Done." }
+        if !cancelled {
+            request.event(.intent, "llm_done", ["engine": turn.engine, "chars": reply.count])
+            request.set("engine", turn.engine)
+            request.set("tokens", ["in": turn.inputTokens, "out": turn.outputTokens, "cache_read": turn.cacheReadTokens, "cache_write": turn.cacheWriteTokens])
+            lastTurn.toolCalls = turn.toolCalls
+            lastTurn.tokens = (turn.inputTokens, turn.outputTokens)
+            JarvisLog.info("Remote turn done: engine=\(turn.engine) tools=\(turn.toolCalls) tokens in/out=\(turn.inputTokens)/\(turn.outputTokens)", request: request.id)
+            notch.logExchange(you: text, jarvis: reply)
+            JarvisLog.conversation(you: text, jarvis: reply, tools: turn.toolCalls)
+            request.event(.spoken, "returned", ["voice": false])
+        }
+        request.finish(outcome: cancelled ? "cancelled" : failed ? "error" : "returned")
+        let waiter = remote?.waiter
+        remote = nil
+        if state != .idle { transition(.replyFinished) }
+        waiter?.resume(returning: RemoteTurnResult(status: cancelled ? .cancelled : .done, requestID: request.id, text: reply, tools: turn.toolCalls, failed: failed))
+    }
+
+    /// Why a remote request may not go ahead with something that needs approval, or nil when it may ask.
+    /// Nobody is at the Mac to press the button, so the voice is the only proof of who is asking: Voice ID
+    /// must be set up and the request itself must have been spoken in the enrolled voice.
+    nonisolated static func remoteApprovalRefusal(enrolled: Bool, voice: VoiceCheck?) -> String? {
+        guard enrolled else { return "I only do that remotely for a voice I can verify, and Voice ID isn't set up yet. Ask me again at the Mac." }
+        guard let voice else { return "That was typed, and I only do that remotely when I can verify your voice." }
+        if voice.isVerified { return nil }
+        switch voice.outcome {
+        case .tooShort: return "I didn't hear enough to be sure it's you, so I won't do that remotely."
+        case .unavailable: return "I can't check your voice right now, so I won't do that remotely."
+        default: return "I couldn't verify your voice, so I won't do that remotely."
+        }
+    }
+
+    private func requestRemoteApproval(_ request: ApprovalRequest) async -> Bool {
+        if let why = Self.remoteApprovalRefusal(enrolled: voiceID?.isEnrolled ?? false, voice: remote?.voice) {
+            JarvisLog.warn("Remote approval refused: \(request.preview) (\(why))", request: trace?.id)
+            trace?.event(.action, "approval_refused", ["reason": "remote_voice_not_verified"])
+            remote?.notes.append(why)
+            return false
+        }
+        let timeout = max(5, config.tuning.remoteApprovalTimeoutSeconds)
+        return await withCheckedContinuation { cont in
+            pendingApproval = (request, cont)
+            transition(.approvalNeeded)
+            approvalGate = .voiceOrButton
+            approvalTimeout?.cancel()
+            approvalTimeout = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(timeout))
+                guard !Task.isCancelled else { return }
+                self?.resolveApproval(id: request.id, approved: false, reason: "timeout")
+            }
+            trace?.event(.action, "approval_asked", ["where": "remote"])
+            // Hand the caller its answer now. The request itself stays parked until `remoteDecide`.
+            let said = remote?.streamed.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let prompt = "Approve: \(Self.spoken(request))? Say yes or no."
+            let waiter = remote?.waiter
+            remote?.waiter = nil
+            waiter?.resume(returning: RemoteTurnResult(status: .needsApproval, requestID: trace?.id ?? "", text: said.isEmpty ? prompt : said + " " + prompt,
+                                                       approvalID: request.id, approvalPrompt: request.preview, approvalExpiresIn: timeout))
+        }
     }
 
     // MARK: Audio routing (capture queue)
@@ -772,5 +940,33 @@ extension ConversationController: EnrollmentHost {
     public func listen(_ onChunk: @escaping @Sendable ([Float]) -> Void) -> () -> Void {
         enrollmentTap = onChunk
         return { [weak self] in self?.enrollmentTap = nil }
+    }
+}
+
+/// What a remote request came to.
+public struct RemoteTurnResult: Equatable, Sendable {
+    public enum Status: String, Sendable {
+        case done
+        /// Something needs a yes first. The request is parked until it is answered or times out.
+        case needsApproval = "needs_approval"
+        /// Jarvis is in the middle of another request.
+        case busy
+        /// Stopped at the Mac before it finished.
+        case cancelled
+    }
+    public var status: Status
+    public var requestID = ""
+    public var text = ""
+    public var tools: [String] = []
+    /// The reply is an error message.
+    public var failed = false
+    public var approvalID: UUID?
+    public var approvalPrompt: String?
+    public var approvalExpiresIn: Double?
+
+    public init(status: Status, requestID: String = "", text: String = "", tools: [String] = [], failed: Bool = false,
+                approvalID: UUID? = nil, approvalPrompt: String? = nil, approvalExpiresIn: Double? = nil) {
+        self.status = status; self.requestID = requestID; self.text = text; self.tools = tools; self.failed = failed
+        self.approvalID = approvalID; self.approvalPrompt = approvalPrompt; self.approvalExpiresIn = approvalExpiresIn
     }
 }

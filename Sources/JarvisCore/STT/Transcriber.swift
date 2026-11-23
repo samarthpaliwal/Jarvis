@@ -22,6 +22,67 @@ public protocol Transcriber: AnyObject {
     func finish()
     /// Abort without a final result.
     func cancel()
+    /// After `start`, waits until audio can be appended without any of it being dropped. Live microphone
+    /// audio does not need this; a whole recording fed at once does. False when it did not get ready in time.
+    func waitUntilAcceptingAudio(timeout: TimeInterval) async -> Bool
+}
+
+public extension Transcriber {
+    func waitUntilAcceptingAudio(timeout: TimeInterval) async -> Bool { true }
+}
+
+/// Transcribes one finished recording (a remote request) with a streaming transcriber.
+public enum UtteranceTranscription {
+    private final class Box: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<String, Error>?
+        private var partial = ""
+        func set(_ c: CheckedContinuation<String, Error>) { lock.lock(); continuation = c; lock.unlock() }
+        func note(_ text: String) { lock.lock(); partial = text; lock.unlock() }
+        var last: String { lock.lock(); defer { lock.unlock() }; return partial }
+        func resume(_ result: Result<String, Error>) {
+            lock.lock(); let c = continuation; continuation = nil; lock.unlock()
+            c?.resume(with: result)
+        }
+    }
+
+    /// - samples: 16 kHz mono. Returns what was said, or "" when there was no speech.
+    public static func transcribe(_ samples: [Float], with transcriber: Transcriber, timeout: TimeInterval = 30) async throws -> String {
+        guard await transcriber.requestAuthorization() else { throw TranscriberError.notAuthorized }
+        nonisolated(unsafe) let t = transcriber
+        let box = Box()
+        defer { t.cancel() }
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+            box.set(cont)
+            do {
+                try t.start(onUpdate: { update in
+                    box.note(update.text)
+                    if update.isFinal { box.resume(.success(update.text)) }
+                }, onError: { error in
+                    // Recognizers report "no speech" as an error. With nothing heard, that is an empty result.
+                    box.last.isEmpty ? box.resume(.success("")) : box.resume(.success(box.last))
+                    _ = error
+                })
+            } catch {
+                box.resume(.failure(error))
+                return
+            }
+            Task {
+                _ = await t.waitUntilAcceptingAudio(timeout: 5)
+                let chunk = 1280     // 80 ms, the size the microphone delivers
+                var i = 0
+                while i < samples.count {
+                    t.append(samples: Array(samples[i..<min(i + chunk, samples.count)]))
+                    i += chunk
+                }
+                // A little silence lets the recognizer close the last word.
+                t.append(samples: [Float](repeating: 0, count: 8000))
+                t.finish()
+                try? await Task.sleep(for: .seconds(timeout))
+                box.resume(.success(box.last))
+            }
+        }
+    }
 }
 
 public enum TranscriberError: LocalizedError {
