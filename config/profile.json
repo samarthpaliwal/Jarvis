@@ -170,6 +170,9 @@
     "openaiTtsModel": "gpt-4o-mini-tts",
     "ttsRequestTimeoutSeconds": 15,
     "logMaxMegabytes": 5,
-    "logKeepFiles": 3
+    "logKeepFiles": 3,
+    "speechBargeIn": "headphones",
+    "followUpGuardMilliseconds": 350,
+    "echoWindowSeconds": 20
   }
 }

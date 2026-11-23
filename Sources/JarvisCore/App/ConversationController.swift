@@ -28,7 +28,11 @@ public final class ConversationController: ObservableObject {
     @Published public var conversationMode: Bool = UserDefaults.standard.object(forKey: "jarvis.conversationMode") as? Bool ?? true {
         didSet { UserDefaults.standard.set(conversationMode, forKey: "jarvis.conversationMode") }
     }
+    /// What Jarvis is saying or last said, and when its audio last stopped. Used to recognise its own echo.
     private var currentReply = ""
+    private var lastSpokeAt = Date.distantPast
+    /// Reports whether the output is headphones. Swappable for tests.
+    public var outputIsHeadphones: () -> Bool = { AudioDeviceInfo.outputIsHeadphones() }
     private var lastUserText = ""
     nonisolated static let endWords: Set<String> = ["thanks", "thank", "thankyou", "bye", "goodbye", "later", "done", "nevermind", "never", "cheers", "nothing", "no"]
 
@@ -200,7 +204,7 @@ public final class ConversationController: ObservableObject {
                 return
             }
             // Talking over Jarvis (not an echo of its own voice) interrupts and becomes the next turn.
-            if config.profile.speech?.interruptOnSpeech ?? true, state == .speaking,
+            if speechBargeInAllowed, state == .speaking,
                Self.isGenuineInterruption(heard: u.text, spoken: currentReply) {
                 JarvisLog.info("Barge-in: speech while speaking: “\(u.text)”", request: trace?.id)
                 trace?.finish(outcome: "interrupted")
@@ -221,6 +225,16 @@ public final class ConversationController: ObservableObject {
                 trace?.event(.transcribed, "first_word")
                 JarvisLog.info(String(format: "Wake → first word %.0f ms", ms), request: trace?.id)
             }
+        }
+    }
+
+    /// Talking over Jarvis only interrupts when the mic cannot hear Jarvis (headphones), unless configured otherwise.
+    private var speechBargeInAllowed: Bool {
+        guard config.profile.speech?.interruptOnSpeech ?? true else { return false }
+        switch config.tuning.speechBargeIn.lowercased() {
+        case "always": return true
+        case "never": return false
+        default: return outputIsHeadphones()
         }
     }
 
@@ -256,6 +270,20 @@ public final class ConversationController: ObservableObject {
         onTurnActive?(false)
         guard !text.isEmpty else {
             trace?.finish(outcome: "no_speech")
+            state = .idle
+            notch.isFollowUp = false
+            notch.collapse()
+            return
+        }
+        // A follow-up that is really the microphone hearing Jarvis's last reply must never reach Claude:
+        // that is how the "hall of mirrors" loops started.
+        if notch.isFollowUp, Date().timeIntervalSince(lastSpokeAt) < config.tuning.echoWindowSeconds,
+           EchoGuard.isEchoAfterSpeaking(heard: text, spoken: currentReply) {
+            let sim = EchoGuard.similarity(heard: text, spoken: currentReply)
+            JarvisLog.warn(String(format: "Dropped echo of my own voice (overlap %.2f, in order %.2f): “%@”", sim.overlap, sim.ordered, String(text.prefix(80))), request: trace?.id)
+            trace?.event(.transcribed, "echo_discarded", ["overlap": sim.overlap, "ordered": sim.ordered, "chars": text.count])
+            trace?.finish(outcome: "echo_discarded")
+            transcriber.cancel()
             state = .idle
             notch.isFollowUp = false
             notch.collapse()
@@ -405,10 +433,18 @@ public final class ConversationController: ObservableObject {
             request?.event(.spoken, "speech_done", ["completed": completed])
             request?.finish(outcome: failed ? "error" : completed ? "spoken" : "interrupted")
             self.transcriber.cancel()
+            self.lastSpokeAt = Date()
             if self.state == .speaking {
                 self.state = .idle
                 if completed, self.conversationMode, (self.config.profile.speech?.followUpSeconds ?? 7) > 0 {
-                    self.startListening(at: Date(), followUp: true)
+                    // Let the speakers and the room go quiet before the microphone counts as "the user".
+                    let after = self.turn
+                    let guardMs = max(0, self.config.tuning.followUpGuardMilliseconds)
+                    Task { [weak self] in
+                        try? await Task.sleep(for: .milliseconds(Int(guardMs)))
+                        guard let self, self.state == .idle, self.turn == after else { return }
+                        self.startListening(at: Date(), followUp: true)
+                    }
                 } else {
                     self.notch.scheduleCollapse(after: completed ? 2.5 : 0.5)
                 }
@@ -418,12 +454,8 @@ public final class ConversationController: ObservableObject {
 
     /// Words heard while Jarvis talks: a real interruption, or just the mic hearing Jarvis?
     nonisolated static func isGenuineInterruption(heard: String, spoken: String) -> Bool {
-        let words = heard.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-        guard words.count >= 2 else { return false }
-        let spokenWords = Set(spoken.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
-        guard !spokenWords.isEmpty else { return true }
-        let overlap = Double(words.filter { spokenWords.contains($0) }.count) / Double(words.count)
-        return overlap < 0.5
+        guard EchoGuard.words(heard).count >= 2 else { return false }
+        return !EchoGuard.isEchoWhileSpeaking(heard: heard, spoken: spoken)
     }
 
     nonisolated static func isConversationEnd(_ text: String) -> Bool {
@@ -439,11 +471,13 @@ public final class ConversationController: ObservableObject {
         let voiceOn = mode.voice.enabled && !voiceMuted
         notch.respond(text, cards: cards, collapseAfter: voiceOn ? 60 : 8)
         guard voiceOn, state == .idle else { onDone?(); return }
+        currentReply = text   // so the cut-in listener can tell this announcement from the user
         state = .speaking
         listenForStop()
         speech.speak(text, volume: Float(mode.voice.volume), rate: Float(config.profile.assistant.speechRate)) { [weak self] completed in
             guard let self else { return }
             self.transcriber.cancel()
+            self.lastSpokeAt = Date()
             if self.state == .speaking {
                 self.state = .idle
                 self.notch.scheduleCollapse(after: completed ? 2.5 : 0.5)
@@ -479,17 +513,35 @@ public final class ConversationController: ObservableObject {
             notch.addCard(.approval(request))
             notch.transcript = ""
             let voiceOn = modes.current.voice.enabled && !voiceMuted
-            if voiceOn {
-                speech.speak("Approve: \(Self.spoken(request))? Say yes or no.", volume: Float(modes.current.voice.volume),
-                             rate: Float(config.profile.assistant.speechRate)) { _ in }
-            }
-            try? transcriber.start(onUpdate: { [weak self] u in self?.handleTranscript(u) }, onError: { _ in })
             wake.setPaused(true)
+            transcriber.cancel()
             approvalTimeout?.cancel()
-            approvalTimeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(self?.config.tuning.approvalTimeoutSeconds ?? 12))
-                guard !Task.isCancelled else { return }
-                self?.resolveApproval(id: request.id, approved: false, reason: "timeout")
+            // Listen for the answer, and start the clock, only once the prompt is no longer audible.
+            // The prompt itself says "yes" and "no"; a microphone that hears it must never count as the answer.
+            let listenForAnswer: () -> Void = { [weak self] in
+                guard let self, self.pendingApproval?.request.id == request.id else { return }
+                try? self.transcriber.start(onUpdate: { [weak self] u in self?.handleTranscript(u) }, onError: { _ in })
+                self.approvalTimeout?.cancel()
+                self.approvalTimeout = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(self?.config.tuning.approvalTimeoutSeconds ?? 12))
+                    guard !Task.isCancelled else { return }
+                    self?.resolveApproval(id: request.id, approved: false, reason: "timeout")
+                }
+            }
+            if voiceOn {
+                let prompt = "Approve: \(Self.spoken(request))? Say yes or no."
+                currentReply = prompt
+                let guardMs = max(0, config.tuning.followUpGuardMilliseconds)
+                speech.speak(prompt, volume: Float(modes.current.voice.volume),
+                             rate: Float(config.profile.assistant.speechRate)) { [weak self] _ in
+                    self?.lastSpokeAt = Date()
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(Int(guardMs)))
+                        listenForAnswer()
+                    }
+                }
+            } else {
+                listenForAnswer()
             }
         }
     }
@@ -500,7 +552,8 @@ public final class ConversationController: ObservableObject {
     }
 
     private func handleApprovalSpeech(_ text: String) {
-        guard let p = pendingApproval else { return }
+        // Never take an answer while Jarvis's own voice is in the air.
+        guard let p = pendingApproval, !speech.isSpeaking else { return }
         let words = Set(text.lowercased().replacingOccurrences(of: ",", with: " ").replacingOccurrences(of: ".", with: " ").split(separator: " ").map(String.init))
         if !words.isDisjoint(with: ["no", "nope", "deny", "cancel", "don't", "dont", "stop"]) {
             resolveApproval(id: p.request.id, approved: false, reason: "voice")

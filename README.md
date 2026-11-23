@@ -513,6 +513,24 @@ The dispatcher handles denylist, approval, logging, and the undo stack.
 
 The dispatcher and denylist are covered by `Tests/JarvisCoreTests/PermissionTests.swift`.
 
+## Echo: keeping Jarvis from hearing itself
+
+On built-in speakers the microphone hears everything Jarvis says. Four things keep that from turning into
+Jarvis answering its own voice:
+
+1. **Speaking means speaking.** A sentence that is still being synthesized counts as speech, so the
+   follow-up listen cannot start while audio is on its way.
+2. **A quiet gap.** After the last word, Jarvis waits `tuning.followUpGuardMilliseconds` (350 ms) before
+   it listens for a follow-up.
+3. **Echo guard.** A follow-up that is a long, in-order copy of the reply Jarvis just gave is dropped and
+   logged as `echo_discarded`. The match is fuzzy, because the recognizer garbles its own voice.
+   Short answers that reuse Jarvis's words ("yes, start something on Spotify") are not affected.
+4. **Talking over Jarvis only interrupts on headphones** (`tuning.speechBargeIn`: `headphones`, `always`,
+   or `never`). On speakers, say "stop", say "Hey Jarvis", or click the card.
+
+Approvals are stricter still: Jarvis starts listening for "yes" or "no" only after its own prompt has
+finished playing, and ignores anything heard while it is speaking.
+
 ## Logs and tracing
 
 Everything lives in `~/Library/Logs/Jarvis/` (menu → *Open Logs*):

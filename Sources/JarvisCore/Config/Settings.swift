@@ -116,6 +116,15 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var openaiTtsModel: String = "gpt-4o-mini-tts"
     public var ttsRequestTimeoutSeconds: Double = 15
 
+    // Echo: Jarvis hearing its own voice
+    /// When talking over Jarvis interrupts it: "headphones" (only when the mic cannot hear the speakers),
+    /// "always", or "never". Saying "stop" or the wake word always works.
+    public var speechBargeIn: String = "headphones"
+    /// Pause between Jarvis finishing a reply and listening for a follow-up, so the room goes quiet first.
+    public var followUpGuardMilliseconds: Double = 350
+    /// For this long after Jarvis speaks, a follow-up that repeats the reply is treated as echo and dropped.
+    public var echoWindowSeconds: Double = 20
+
     // Logs
     /// A log file rotates when it passes this size.
     public var logMaxMegabytes: Double = 5
@@ -148,6 +157,9 @@ public struct Tuning: Codable, Equatable, Sendable {
         kokoroPort = try c.decodeIfPresent(Int.self, forKey: .kokoroPort) ?? kokoroPort
         openaiTtsModel = try c.decodeIfPresent(String.self, forKey: .openaiTtsModel) ?? openaiTtsModel
         ttsRequestTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .ttsRequestTimeoutSeconds) ?? ttsRequestTimeoutSeconds
+        speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn
+        followUpGuardMilliseconds = try c.decodeIfPresent(Double.self, forKey: .followUpGuardMilliseconds) ?? followUpGuardMilliseconds
+        echoWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .echoWindowSeconds) ?? echoWindowSeconds
         logMaxMegabytes = try c.decodeIfPresent(Double.self, forKey: .logMaxMegabytes) ?? logMaxMegabytes
         logKeepFiles = try c.decodeIfPresent(Int.self, forKey: .logKeepFiles) ?? logKeepFiles
     }
