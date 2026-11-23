@@ -50,6 +50,13 @@ public protocol IntentEngine: AnyObject {
 /// The language model behind the intent stage. Implemented by `ClaudeClient`.
 public protocol LanguageModel: AnyObject, Sendable {
     func stream(_ request: ClaudeClient.Request) -> AsyncThrowingStream<ClaudeClient.Event, Error>
+    /// Writes or refreshes the prompt cache for this request's tools and system prompt without generating
+    /// anything. Returns tokens read from and written to the cache.
+    func prewarm(_ request: ClaudeClient.Request) async throws -> (cacheRead: Int, cacheWrite: Int)
+}
+
+public extension LanguageModel {
+    func prewarm(_ request: ClaudeClient.Request) async throws -> (cacheRead: Int, cacheWrite: Int) { (0, 0) }
 }
 
 /// Stage 4 — actions. Runs one tool call, after every safety check. Implemented by `ToolDispatcher`.

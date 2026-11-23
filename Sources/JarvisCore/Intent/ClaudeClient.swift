@@ -75,6 +75,33 @@ public final class ClaudeClient: @unchecked Sendable {
         session = URLSession(configuration: cfg)
     }
 
+    /// A `max_tokens: 0` request: the API reads the tools and system prompt into its cache and returns at
+    /// once with no output. It must not stream, and it must carry the same tools, system prompt, effort,
+    /// and thinking setting as a real turn, or it warms an entry real turns never hit.
+    public func prewarmBody(for r: Request) -> JSONObject {
+        var b = body(for: r)
+        b["max_tokens"] = 0
+        b["stream"] = false
+        b["messages"] = [["role": "user", "content": "warmup"]]
+        return b
+    }
+
+    public func prewarm(_ r: Request) async throws -> (cacheRead: Int, cacheWrite: Int) {
+        guard let key = apiKeyProvider() else { throw ClientError.noAPIKey }
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(key, forHTTPHeaderField: "x-api-key")
+        req.setValue(apiVersion, forHTTPHeaderField: "anthropic-version")
+        req.httpBody = try JSONSerialization.data(withJSONObject: prewarmBody(for: r))
+        let (data, response) = try await session.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { throw ClientError.http(code, Self.errorMessage(String(data: data, encoding: .utf8) ?? "")) }
+        let usage = ((try? JSONSerialization.jsonObject(with: data)) as? JSONObject)?["usage"] as? JSONObject
+        return (usage?["cache_read_input_tokens"] as? Int ?? 0, usage?["cache_creation_input_tokens"] as? Int ?? 0)
+    }
+
     public func body(for r: Request) -> JSONObject {
         var system: [JSONObject] = [["type": "text", "text": r.system, "cache_control": ["type": "ephemeral"]]]
         if !r.systemVolatile.isEmpty { system.append(["type": "text", "text": r.systemVolatile]) }

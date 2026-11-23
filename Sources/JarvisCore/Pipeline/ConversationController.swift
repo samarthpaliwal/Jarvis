@@ -43,6 +43,8 @@ public final class ConversationController: ObservableObject {
     public nonisolated(unsafe) var extraAudioTap: (([Float]) -> Void)?
     /// Called when a user turn starts / ends so the spotter can pause.
     public var onTurnActive: ((Bool) -> Void)?
+    /// Called when the first word of a spoken request is transcribed.
+    public var onFirstWord: (() -> Void)?
 
     /// Streams a reply for a transcript. Default: the Brain (Claude). Tests can swap it.
     public var responder: (String, @escaping (String) -> Void) async throws -> Brain.Turn
@@ -115,6 +117,9 @@ public final class ConversationController: ObservableObject {
         wake.onLevel = { [weak self] level in self?.notch.pushAudioLevel(level) }
         wake.audioTap = { [weak self] chunk in self?.forwardAudio(chunk) }
         notch.onApprovalDecision = { [weak self] id, ok in self?.resolveApproval(id: id, approved: ok) }
+        (speech as? SpeechRouter)?.onChunkTiming = { [weak self] words, synthMs, waitMs, playMs in
+            self?.trace?.event(.spoken, "tts_chunk", ["words": words, "synth_ms": synthMs.rounded(), "wait_ms": waitMs.rounded(), "play_ms": playMs.rounded()])
+        }
         speech.onAudioStart = { [weak self] engine in
             guard let trace = self?.trace, trace.mark("first_audio") == nil else { return }
             trace.event(.spoken, "first_audio", ["engine": engine])
@@ -213,6 +218,8 @@ public final class ConversationController: ObservableObject {
             s.noSpeechTimeout = sp.noSpeechTimeoutSeconds
             s.maxDuration = sp.maxUtteranceSeconds
         }
+        s.silenceAfterSentence = config.tuning.endpointFastSilenceSeconds
+        s.sentenceMinWords = config.tuning.endpointFastMinWords
         return s
     }
 
@@ -248,6 +255,7 @@ public final class ConversationController: ObservableObject {
                 let ms = Date().timeIntervalSince(wakeTime) * 1000
                 lastTurn.wakeToFirstWordMs = ms
                 trace?.event(.transcribed, "first_word")
+                onFirstWord?()   // a real request is under way: a good moment to warm the model's cache
                 JarvisLog.info(String(format: "Wake → first word %.0f ms", ms), request: trace?.id)
             }
         }
@@ -298,7 +306,7 @@ public final class ConversationController: ObservableObject {
         lastTurn.transcript = text
         JarvisLog.info("Listening ended (\(reason.rawValue)): “\(text)”", request: trace?.id)
         trace?.event(.transcribed, "speech_end", ["reason": reason.rawValue, "chars": text.count,
-                                                   "silence_wait_ms": (endpointer.settings.silenceAfterSpeech * 1000).rounded()])
+                                                   "silence_wait_ms": (endpointer.requiredSilence * 1000).rounded()])
         wake.setPaused(false)
         onTurnActive?(false)
         guard !text.isEmpty else {
@@ -389,7 +397,7 @@ public final class ConversationController: ObservableObject {
         let voiceOn = mode.voice.enabled && !voiceMuted
         let volume = Float(mode.voice.volume)
         let rate = Float(config.profile.assistant.speechRate)
-        var chunker = SentenceChunker()
+        var chunker = SentenceChunker(firstChunkMinWords: config.tuning.ttsFirstChunkMinWords)
         var firstDelta = true
         var spokeSomething = false
         currentReply = ""

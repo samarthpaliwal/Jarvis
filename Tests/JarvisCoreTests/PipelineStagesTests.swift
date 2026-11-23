@@ -161,7 +161,12 @@ final class PipelineStagesTests: XCTestCase {
 final class ScriptedModel: LanguageModel, @unchecked Sendable {
     var rounds: [[ClaudeClient.Event]]
     private(set) var requests: [ClaudeClient.Request] = []
+    private(set) var prewarms: [ClaudeClient.Request] = []
     init(rounds: [[ClaudeClient.Event]]) { self.rounds = rounds }
+    func prewarm(_ request: ClaudeClient.Request) async throws -> (cacheRead: Int, cacheWrite: Int) {
+        prewarms.append(request)
+        return (0, 20_000)
+    }
     func stream(_ request: ClaudeClient.Request) -> AsyncThrowingStream<ClaudeClient.Event, Error> {
         requests.append(request)
         let events = rounds.isEmpty ? [] : rounds.removeFirst()
@@ -207,5 +212,27 @@ final class IntentStageTests: XCTestCase {
         XCTAssertEqual(last?.first?["type"] as? String, "tool_result")
         XCTAssertEqual(last?.first?["content"] as? String, "Battery 76%, on power.")
         XCTAssertEqual(model.requests[0].effort, config.tuning.llmEffort)
+    }
+
+    /// The API reports usage at message_start and again, cumulatively, at message_delta. Each round
+    /// must be counted once. (Found on 2026-11-22: every token was being counted twice.)
+    func testUsageIsCountedOncePerRound() async throws {
+        let model = ScriptedModel(rounds: [
+            [.usage(input: 190, output: 0, cacheRead: 10_405, cacheWrite: 0),
+             .toolUseStart(id: "toolu_1", name: "system_status"), .toolInputDelta("{}"), .contentBlockStop,
+             .stopReason("tool_use"), .usage(input: 190, output: 40, cacheRead: 10_405, cacheWrite: 0)],
+            [.usage(input: 260, output: 0, cacheRead: 10_405, cacheWrite: 0),
+             .textDelta("Battery is at 76 percent."), .contentBlockStop,
+             .stopReason("end_turn"), .usage(input: 0, output: 25, cacheRead: 0, cacheWrite: 0)],   // a delta that only carries output
+        ])
+        let config = ConfigStore(directory: ConfigTests.repoConfigDir, env: [:])
+        let notch = NotchViewModel()
+        let brain = Brain(client: model, dispatcher: FakeActions(), config: config, modes: ModeManager(config: config, notch: notch), undo: UndoStack())
+        brain.privateMode = false
+        let reply = try await brain.respond(to: "battery?") { _ in }
+        XCTAssertEqual(reply.inputTokens, 190 + 260)
+        XCTAssertEqual(reply.outputTokens, 40 + 25)
+        XCTAssertEqual(reply.cacheReadTokens, 10_405 * 2, "once per round, not once per usage event")
+        XCTAssertEqual(reply.cacheWriteTokens, 0)
     }
 }

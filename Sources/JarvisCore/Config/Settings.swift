@@ -122,6 +122,18 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var openaiTtsModel: String = "gpt-4o-mini-tts"
     public var ttsRequestTimeoutSeconds: Double = 15
 
+    // Latency
+    /// When what was heard already ends a sentence (. ? !), end the turn after this much silence instead
+    /// of `speech.silenceEndSeconds`. 0 turns this off.
+    public var endpointFastSilenceSeconds: Double = 0.9
+    /// The fast silence applies only to utterances with at least this many words.
+    public var endpointFastMinWords: Int = 3
+    /// Speak the opening clause of a reply as soon as it has this many words, instead of waiting for the
+    /// whole first sentence. 0 waits for the sentence.
+    public var ttsFirstChunkMinWords: Int = 3
+    /// Warm Claude's prompt cache when a request starts and the last one was longer ago than this. 0 turns it off.
+    public var cachePrewarmAfterSeconds: Double = 240
+
     // Echo: Jarvis hearing its own voice
     /// When talking over Jarvis interrupts it: "headphones" (only when the mic cannot hear the speakers),
     /// "always", or "never". Saying "stop" or the wake word always works.
@@ -166,6 +178,10 @@ public struct Tuning: Codable, Equatable, Sendable {
         kokoroPort = try c.decodeIfPresent(Int.self, forKey: .kokoroPort) ?? kokoroPort
         openaiTtsModel = try c.decodeIfPresent(String.self, forKey: .openaiTtsModel) ?? openaiTtsModel
         ttsRequestTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .ttsRequestTimeoutSeconds) ?? ttsRequestTimeoutSeconds
+        endpointFastSilenceSeconds = try c.decodeIfPresent(Double.self, forKey: .endpointFastSilenceSeconds) ?? endpointFastSilenceSeconds
+        endpointFastMinWords = try c.decodeIfPresent(Int.self, forKey: .endpointFastMinWords) ?? endpointFastMinWords
+        ttsFirstChunkMinWords = try c.decodeIfPresent(Int.self, forKey: .ttsFirstChunkMinWords) ?? ttsFirstChunkMinWords
+        cachePrewarmAfterSeconds = try c.decodeIfPresent(Double.self, forKey: .cachePrewarmAfterSeconds) ?? cachePrewarmAfterSeconds
         speechBargeIn = try c.decodeIfPresent(String.self, forKey: .speechBargeIn) ?? speechBargeIn
         followUpGuardMilliseconds = try c.decodeIfPresent(Double.self, forKey: .followUpGuardMilliseconds) ?? followUpGuardMilliseconds
         echoWindowSeconds = try c.decodeIfPresent(Double.self, forKey: .echoWindowSeconds) ?? echoWindowSeconds

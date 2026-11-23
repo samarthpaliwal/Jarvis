@@ -34,6 +34,7 @@ def main():
         base = os.path.expanduser("~/Library/Logs/Jarvis/trace.jsonl")
         paths = sorted(glob.glob(base + ".*"), reverse=True) + [base]
     requests, tools = [], defaultdict(list)
+    first_chunk, silence, prewarm, seen_chunk = [], [], [], set()
     for path in paths:
         if not os.path.exists(path): continue
         for line in open(path, errors="ignore"):
@@ -42,6 +43,10 @@ def main():
             if since and o.get("ts", "") < since: continue
             if o.get("event") == "request": requests.append(o)
             elif o.get("event") == "tool" and "ms" in o: tools[o.get("tool", "?")].append(o["ms"])
+            elif o.get("event") == "tts_chunk" and o.get("request") not in seen_chunk:
+                seen_chunk.add(o.get("request")); first_chunk.append(o.get("synth_ms", 0))
+            elif o.get("event") == "speech_end" and "silence_wait_ms" in o: silence.append(o["silence_wait_ms"])
+            elif o.get("event") == "cache_prewarm": prewarm.append(o.get("ms", 0))
     if last: requests = requests[-last:]
     if not requests:
         print("No finished requests in the trace yet. Talk to Jarvis, then run this again."); return
@@ -60,6 +65,11 @@ def main():
     if tts:
         print(f"{'first token -> first audio (speech synthesis)':46} {len(tts):>4} {pct(tts, .5):>7.0f} {pct(tts, .9):>7.0f} {max(tts):>7.0f}")
         if slowest is None or pct(tts, .5) > slowest[1]: slowest = ("speech synthesis", pct(tts, .5))
+    for label, v in (("silence wait that ended the turn", silence), ("first spoken chunk: synthesis only", first_chunk),
+                     ("cache pre-warm request", prewarm)):
+        if v: print(f"{label:46} {len(v):>4} {pct(v, .5):>7.0f} {pct(v, .9):>7.0f} {max(v):>7.0f}")
+    cold = [r for r in answered if r.get("tokens", {}).get("cache_read", 0) == 0 and r.get("engine") == "claude"]
+    if answered: print(f"answered with a cold prompt cache: {len(cold)} of {len(answered)}")
     if slowest: print(f"\nSlowest stage at the median: {slowest[0]} ({slowest[1]:.0f} ms)")
     if tools:
         print(f"\n{'tool':28} {'n':>4} {'p50':>7} {'p90':>7} {'max':>7}")

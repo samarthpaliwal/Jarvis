@@ -162,6 +162,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                               speech: voice, config: config, modes: modes, brain: brain)
         voice.isOnline = { [weak self] in self?.brain.isOnline ?? true }
         floating?.onClose = { [weak self] in self?.conversation.stopEverything() }
+        conversation.onFirstWord = { [weak self] in self?.brain.prewarmIfCold() }
         // Microphone trouble is said out loud, once, instead of leaving Jarvis silently deaf.
         wake.onMicHealth = { [weak self] health in
             guard let self else { return }
@@ -252,6 +253,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                             if q == "!homecoming" { self.scenes.homecoming(trigger: "debug"); return }
                                             if q == "!arrive" { self.spotter.openWindow(minutes: 10, reason: "debug"); return }
                                             if q == "!hud" { self.hud.show(scene: false); return }
+                                            if q == "!prewarm" { self.brain.prewarmIfCold(force: true); return }   // silent: no HUD, no speech
                                             if q == "!brief" {
                                                 Task { let r = await self.briefing.build(mode: self.modes.current); self.conversation.deliver(await self.narrator.narrate(r, kind: "briefing on request"), cards: [.briefing(r.data)]) }
                                                 return

@@ -33,7 +33,11 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     public var onFailure: ((String, Error) -> Void)?
     public var onAudioStart: ((String) -> Void)?
 
-    private struct Item { let text: String; let volume: Float; let audio: Task<Data, Error> }
+    /// Timings for one spoken chunk: how long synthesis took, how long the finished audio waited for the
+    /// main thread or the previous chunk, and how long starting playback took. Main queue.
+    public var onChunkTiming: ((_ words: Int, _ synthMs: Double, _ waitMs: Double, _ playMs: Double) -> Void)?
+
+    private struct Item { let text: String; let volume: Float; let audio: Task<(data: Data, synthMs: Double, readyAt: Date), Error> }
     private var queue: [Item] = []
     private var player: AVAudioPlayer?
     private var completion: ((Bool) -> Void)?
@@ -67,7 +71,11 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
     public func enqueue(_ text: String, volume: Float, rate: Float) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        let fetch = Task { try await (self.synthesizerOverride ?? self.synthesize)(t) }
+        let fetch = Task { () -> (data: Data, synthMs: Double, readyAt: Date) in
+            let started = Date()
+            let data = try await (self.synthesizerOverride ?? self.synthesize)(t)
+            return (data, Date().timeIntervalSince(started) * 1000, Date())
+        }
         queue.append(Item(text: t, volume: volume, audio: fetch))
         // Start only if nothing is playing AND nothing is being prepared; otherwise two sentences
         // would be fetched and played on top of each other.
@@ -106,8 +114,10 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
         preparing = true
         Task { @MainActor in
             do {
-                let data = try await item.audio.value
+                let audio = try await item.audio.value
+                let data = audio.data
                 guard gen == self.generation else { return }
+                let playStarted = Date()
                 let p = try AVAudioPlayer(data: data)
                 p.delegate = self
                 p.volume = max(0, min(1, item.volume))
@@ -116,6 +126,8 @@ public final class CloudSpeechOutput: NSObject, SpeechOutput, AVAudioPlayerDeleg
                 self.preparing = false
                 guard p.play() else { throw NSError(domain: "Jarvis.TTS", code: 2, userInfo: [NSLocalizedDescriptionKey: "audio player refused to start"]) }
                 self.onAudioStart?(self.provider.rawValue)
+                self.onChunkTiming?(item.text.split(separator: " ").count, audio.synthMs,
+                                    playStarted.timeIntervalSince(audio.readyAt) * 1000, Date().timeIntervalSince(playStarted) * 1000)
             } catch is CancellationError {
                 if gen == self.generation { self.preparing = false; self.playNext() }
             } catch {
@@ -201,6 +213,9 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
     public var onAudioStart: ((String) -> Void)? {
         didSet { apple.onAudioStart = onAudioStart; cloud?.onAudioStart = onAudioStart }
     }
+    public var onChunkTiming: ((Int, Double, Double, Double) -> Void)? {
+        didSet { cloud?.onChunkTiming = onChunkTiming }
+    }
 
     public init(apple: AppleSpeechOutput) {
         self.apple = apple
@@ -235,6 +250,7 @@ public final class SpeechRouter: SpeechOutput, @unchecked Sendable {
                 self.apple.enqueue(text, volume: self.lastVolume, rate: self.lastRate)
             }
             c.onAudioStart = onAudioStart
+            c.onChunkTiming = onChunkTiming
             cloud = c
         } else {
             cloud = nil

@@ -176,6 +176,10 @@
     "echoWindowSeconds": 20,
     "toolTimeoutSeconds": 45,
     "turnTimeoutSeconds": 120,
-    "repeatErrorAfterSeconds": 60
+    "repeatErrorAfterSeconds": 60,
+    "endpointFastSilenceSeconds": 0.9,
+    "endpointFastMinWords": 3,
+    "ttsFirstChunkMinWords": 3,
+    "cachePrewarmAfterSeconds": 240
   }
 }

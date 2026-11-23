@@ -11,6 +11,10 @@ public struct Endpointer: Equatable {
         public var silenceAfterSpeech: TimeInterval = 1.3
         /// Seconds with no transcript at all before giving up.
         public var noSpeechTimeout: TimeInterval = 6
+        /// Shorter silence when the transcript already ends a sentence (. ? !). Nil or 0 turns it off.
+        public var silenceAfterSentence: TimeInterval?
+        /// The shorter silence needs at least this many words ("Play." alone is not a finished request).
+        public var sentenceMinWords = 3
         /// Hard cap on one utterance.
         public var maxDuration: TimeInterval = 20
         public init() {}
@@ -46,6 +50,14 @@ public struct Endpointer: Equatable {
         if transcript.isEmpty {
             return now.timeIntervalSince(startedAt) >= settings.noSpeechTimeout ? .noSpeech : nil
         }
-        return now.timeIntervalSince(lastChangeAt) >= settings.silenceAfterSpeech ? .silenceAfterSpeech : nil
+        return now.timeIntervalSince(lastChangeAt) >= requiredSilence ? .silenceAfterSpeech : nil
+    }
+
+    /// How long the transcript must stay unchanged before the turn ends.
+    public var requiredSilence: TimeInterval {
+        guard let fast = settings.silenceAfterSentence, fast > 0, fast < settings.silenceAfterSpeech,
+              let last = transcript.last, ".?!".contains(last),
+              transcript.split(separator: " ").count >= settings.sentenceMinWords else { return settings.silenceAfterSpeech }
+        return fast
     }
 }

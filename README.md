@@ -565,6 +565,42 @@ Jarvis answering its own voice:
 Approvals are stricter still: Jarvis starts listening for "yes" or "no" only after its own prompt has
 finished playing, and ignores anything heard while it is speaking.
 
+## Latency
+
+Time from the end of your sentence to Jarvis's voice has three parts. Each was measured, then fixed
+(Phase 2, 2026-11-22). Settings are in `profile.json → tuning`.
+
+| Part | Before | After | How |
+|------|--------|-------|-----|
+| Silence wait that ends your turn | 1.3 s, always | 0.9 s when what you said already ends in `.` `?` `!` (74% of 181 logged utterances), otherwise 1.3 s | `endpointFastSilenceSeconds` |
+| Claude's first word | median 1.6 s with a warm prompt cache, 1.8 s cold; 90th percentile 2.3 s warm, 4.9 s cold. 29% of 150 turns were cold | The cache is warmed while you are still speaking, so the turn reads it instead of writing it. Two warm turns measured after the change: 0.76 s and 0.83 s | `cachePrewarmAfterSeconds` |
+| Synthesis of the first spoken chunk (Kokoro, 89 logged replies) | median 1.34 s, 90th percentile 3.65 s, worst 23.6 s | median 1.07 s, 90th percentile 1.61 s, worst 4.66 s | `ttsFirstChunkMinWords`, and a fixed sentence splitter |
+
+What changed:
+
+- **Opening clause first.** Speech starts on "Good morning, Sam," instead of waiting for the whole first
+  sentence. Synthesis time grows with the length of the chunk.
+- **Sentence splitter bug.** A sentence ending in a two-letter word ("…act on.", "…want it.") was taken for
+  an abbreviation, and nothing after it was split. Such a reply was spoken as one clip after the model
+  finished; that is the 23.6 s case.
+- **Cache pre-warm.** At the first transcribed word, if the last request was more than four minutes ago,
+  Jarvis sends a `max_tokens: 0` request with the same tools and system prompt. It costs one cache read
+  (about $0.001) when the cache was still warm, and nothing extra when it was cold, because the turn
+  would have paid for that write anyway. False wakes never trigger it.
+- **Token counts were doubled.** Usage is reported at the start and again at the end of a message; both
+  were added. Fixed before the cost cap was built on top of it.
+
+The slowest remaining part is Kokoro itself, at about three times real time on this Mac: roughly 1.1 to
+2.6 s for the first chunk inside a live turn. Thread count makes no difference and the CoreML provider
+crashes; a different model file is the next lever.
+
+To re-measure:
+
+```bash
+scripts/latency-report.py --last 50          # per stage, from real requests
+scripts/tts-bench.py chunks.json             # voice engine alone; see the script header
+```
+
 ## When something fails
 
 The rule: every failure produces one short spoken sentence (or an on-screen one when voice is off), and

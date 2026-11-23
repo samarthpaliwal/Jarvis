@@ -18,6 +18,9 @@ public final class Brain: ObservableObject {
     /// Incremented per cloud turn; only the newest turn may write `history`.
     private var generation = 0
     private var lastActivity = Date.distantPast
+    /// When the prompt cache was last written or read (a real request or a pre-warm).
+    private var cacheTouchedAt = Date.distantPast
+    private var prewarming = false
     private var historyTimeout: TimeInterval { config.tuning.llmHistoryTimeoutMinutes * 60 }
     private var maxHistoryMessages: Int { max(2, config.tuning.llmMaxHistoryMessages) }
     private var maxToolRounds: Int { max(1, config.tuning.llmMaxToolRounds) }
@@ -121,6 +124,7 @@ public final class Brain: ObservableObject {
 
         for round in 0...maxToolRounds {
             convo = Self.sanitized(convo)
+            cacheTouchedAt = Date()
             var request = ClaudeClient.Request(model: model, system: stable, messages: convo, tools: tools,
                                                maxTokens: config.profile.claude.maxTokens, effort: config.tuning.llmEffort)
             request.systemVolatile = volatile
@@ -132,6 +136,7 @@ public final class Brain: ObservableObject {
             var needsGap = false   // text resuming after a web search needs a space ("Checking now. The…")
 
             let roundStarted = Date()
+            var roundUsage = (0, 0, 0, 0)
             let events = client.stream(request)
             do {
             for try await event in events {
@@ -163,7 +168,10 @@ public final class Brain: ObservableObject {
                 case .stopReason(let s):
                     stopReason = s
                 case .usage(let i, let o, let cr, let cw):
-                    turn.inputTokens += i; turn.outputTokens += o; turn.cacheReadTokens += cr; turn.cacheWriteTokens += cw
+                    // The API reports usage at the start of a message and again, cumulatively, at the end.
+                    // Keep the largest value seen per field and add it once per round. Adding both events
+                    // counted every token twice.
+                    roundUsage = (max(roundUsage.0, i), max(roundUsage.1, o), max(roundUsage.2, cr), max(roundUsage.3, cw))
                 case .refusal(let category):
                     turn.refused = true
                     JarvisLog.warn("Claude refused (category: \(category ?? "unknown"))")
@@ -187,6 +195,9 @@ public final class Brain: ObservableObject {
                 throw e
             }
             if !currentText.isEmpty { assistantContent.append(["type": "text", "text": currentText]) }
+            // Before any return below: a returned `turn` is copied before a defer would run.
+            turn.inputTokens += roundUsage.0; turn.outputTokens += roundUsage.1
+            turn.cacheReadTokens += roundUsage.2; turn.cacheWriteTokens += roundUsage.3
             RequestTrace.current?.event(.intent, "llm_round", ["round": round, "stop": stopReason, "model": model,
                                                                "ms": (Date().timeIntervalSince(roundStarted) * 1000).rounded(),
                                                                "tool_calls": assistantContent.filter { ($0["type"] as? String)?.hasSuffix("tool_use") ?? false }.count])
@@ -235,6 +246,41 @@ public final class Brain: ObservableObject {
             if Task.isCancelled { return turn }   // results are recorded, so the history stays valid
         }
         return turn
+    }
+
+    // MARK: Cache pre-warm
+
+    /// Called when a spoken request starts. If the prompt cache has probably expired (5-minute lifetime),
+    /// warm it now, while the user is still talking, so the real request reads ~20k tokens from cache
+    /// instead of writing them. A cold first token was 4.9 s at the 90th percentile against 2.3 s warm.
+    /// Costs one cache read when the cache was still warm; the write would have been paid by the turn anyway.
+    public func prewarmIfCold(force: Bool = false) {
+        let after = config.tuning.cachePrewarmAfterSeconds
+        guard !prewarming, isOnline, !privateMode else { return }
+        guard force || (after > 0 && Date().timeIntervalSince(cacheTouchedAt) > after) else { return }
+        prewarming = true
+        cacheTouchedAt = Date()
+        let mode = modes.current
+        var (stable, _) = SystemPrompt.parts(profile: config.profile, mode: mode, online: isOnline, undoAvailable: undo.lastDescription)
+        if let catalog = skills?.catalog { stable += "\n\n" + catalog }
+        let tools = Self.webTools(model: model, profile: config.profile, mode: mode, fetchMaxContentTokens: config.tuning.webFetchMaxContentTokens)
+            + dispatcher.definitions(for: mode)
+        let request = ClaudeClient.Request(model: model, system: stable, messages: [], tools: tools,
+                                           maxTokens: 0, effort: config.tuning.llmEffort)
+        let client = client
+        let trace = RequestTrace.current
+        let started = Date()
+        Task { [weak self] in
+            do {
+                let usage = try await client.prewarm(request)
+                let ms = (Date().timeIntervalSince(started) * 1000).rounded()
+                JarvisLog.info("Cache pre-warm: read \(usage.cacheRead), wrote \(usage.cacheWrite) tokens in \(Int(ms)) ms", request: trace?.id)
+                trace?.event(.intent, "cache_prewarm", ["ms": ms, "cache_read": usage.cacheRead, "cache_write": usage.cacheWrite])
+            } catch {
+                JarvisLog.warn("Cache pre-warm failed: \(error.localizedDescription)", request: trace?.id)
+            }
+            await MainActor.run { self?.prewarming = false }
+        }
     }
 
     // MARK: Local model (Ollama)
