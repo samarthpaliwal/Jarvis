@@ -177,6 +177,14 @@ public struct Tuning: Codable, Equatable, Sendable {
     /// app Jarvis serves itself. For a native wrapper later: "capacitor://localhost,https://localhost".
     public var remoteAllowedOrigins: String = ""
 
+    // Triple-tap Command: wake Jarvis from the keyboard, anywhere in macOS
+    /// How many quick taps of the Command key wake Jarvis (2 to 5). 0 = off.
+    public var commandTapCount: Double = 3
+    /// A tap is Command held no longer than this.
+    public var commandTapMaxHoldMilliseconds: Double = 260
+    /// The next tap must start within this long of the last one ending.
+    public var commandTapMaxGapMilliseconds: Double = 380
+
     // Stability
     /// If the main thread does not respond for this many seconds, Jarvis exits so the supervisor restarts it. 0 = off.
     public var hangTimeoutSeconds: Double = 30
@@ -277,6 +285,9 @@ public struct Tuning: Codable, Equatable, Sendable {
         speakerThreshold = try c.decodeIfPresent(Double.self, forKey: .speakerThreshold) ?? speakerThreshold
         unverifiedVoiceApproval = try c.decodeIfPresent(String.self, forKey: .unverifiedVoiceApproval) ?? unverifiedVoiceApproval
         hangTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .hangTimeoutSeconds) ?? hangTimeoutSeconds
+        commandTapCount = try c.decodeIfPresent(Double.self, forKey: .commandTapCount) ?? commandTapCount
+        commandTapMaxHoldMilliseconds = try c.decodeIfPresent(Double.self, forKey: .commandTapMaxHoldMilliseconds) ?? commandTapMaxHoldMilliseconds
+        commandTapMaxGapMilliseconds = try c.decodeIfPresent(Double.self, forKey: .commandTapMaxGapMilliseconds) ?? commandTapMaxGapMilliseconds
         remotePort = try c.decodeIfPresent(Int.self, forKey: .remotePort) ?? remotePort
         remoteBind = try c.decodeIfPresent(String.self, forKey: .remoteBind) ?? remoteBind
         remoteMaxAudioSeconds = try c.decodeIfPresent(Double.self, forKey: .remoteMaxAudioSeconds) ?? remoteMaxAudioSeconds

@@ -54,6 +54,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public private(set) var faceStore: FaceTemplateStore!
     public private(set) var ownerLock: OwnerLock!
     public private(set) var devices: DeviceHub!
+    private var commandTaps: CommandTapTrigger?
     private var faceEnrollmentPending = false
     private var enrollmentPending = false
     public private(set) var glasses: PushedFrameSource!
@@ -507,6 +508,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.privacy = { [weak self] in self?.dataFlows() ?? [] }
         menuBar.onEnrollVoice = { [weak self] in self?.startVoiceEnrollment() }
         JarvisLog.info("Brain: model \(brain.model), \(dispatcher.tools.count) tools, API key \(KeychainStore.apiKey() != nil ? "present" : SecretVault.shared.usesHelper && SecretVault.shared.state != .unlocked ? "locked until Touch ID" : "MISSING")")
+        // Triple-tap Command wakes Jarvis from the keyboard, like saying "Hey Jarvis". No extra permission.
+        let taps = Int(config.tuning.commandTapCount)
+        if taps >= 2 {
+            let settings = CommandTapDetector.Settings(taps: taps, maxHold: min(1, max(0.08, config.tuning.commandTapMaxHoldMilliseconds / 1000)),
+                                                       maxGap: min(1.5, max(0.12, config.tuning.commandTapMaxGapMilliseconds / 1000)))
+            commandTaps = CommandTapTrigger(settings: settings) { [weak self] in
+                Task { @MainActor in
+                    JarvisLog.info("Command tapped \(settings.taps) times: waking")
+                    self?.wake.simulateWake()
+                }
+            }
+            commandTaps?.start()
+            JarvisLog.info("Command tap trigger: on, \(settings.taps) taps (hold ≤ \(Int(settings.maxHold * 1000)) ms, gap ≤ \(Int(settings.maxGap * 1000)) ms)")
+        } else {
+            JarvisLog.info("Command tap trigger: off")
+        }
         debugSignals = DebugSignals(onWake: { [weak self] in self?.wake.simulateWake() },
                                     onBriefing: { [weak self] in
                                         guard let self else { return }
@@ -734,6 +751,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         remote?.stop()
+        commandTaps?.stop()
         StayAwake.shared.stop()
         Supervisor.noteCleanExit()
         wake?.stop()

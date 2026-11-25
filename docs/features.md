@@ -651,3 +651,16 @@ levels, and the limits are in [privacy and security](privacy-and-security.md#own
 7. In the phone app, ••• → Send a note to the Mac: it shows in the notch and is read out. Cover the camera,
    wait a minute, send another: the Mac only says a note is waiting.
 
+## Triple-tap Command
+
+Tap the Command key three times quickly, in any app, and Jarvis wakes as if you had said "Hey Jarvis".
+"Hey Jarvis" and the menu's Wake Jarvis Now keep working as before.
+
+It needs no extra permission. About 80 times a second Jarvis asks macOS two things: is Command down, and how
+many key and mouse presses have happened so far. It never learns which keys. A tap only counts if Command
+went down and up within 260 ms with no other modifier and no press in between, so Cmd+C, Cmd+V, Cmd-click and
+holding Command do nothing.
+
+Settings (in `profile.json` under `tuning`, or as `JARVIS_…` lines in `jarvis.env`): `commandTapCount`
+(3; 2 to 5; 0 turns it off), `commandTapMaxHoldMilliseconds` (260), `commandTapMaxGapMilliseconds` (380).
+

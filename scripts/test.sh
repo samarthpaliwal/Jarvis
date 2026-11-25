@@ -21,7 +21,7 @@ STAGES = [
     ("voiceid",  "Voice ID",             "VoiceCaptureTests VoiceGateRuleTests SentenceRecorderTests VoiceEnrollmentTests VoiceGatedApprovalTests VoiceMathTests SpeakerVerifierTests ECAPAModelTests"),
     ("remote",   "Remote access",        "TailnetTests HTTPParserTests HTTPServerTests RemoteTokenTests RemoteAPITests RemoteAccessServiceTests RemoteTurnTests WebAppTests PairingTests WebPushTests CheckInBoxTests PresenceCheckInTests"),
     ("privacy",  "Privacy and keys",     "PrivacyTests RetentionTests SecretVaultTests"),
-    ("app",      "App and settings",     "ConfigTests SettingsTests LenientConfigTests ModeScorerTests QuietHoursTests NotchGeometryTests SupervisorTests HangWatchdogTests StayAwakeTests PresenceTrackerTests"),
+    ("app",      "App and settings",     "ConfigTests SettingsTests LenientConfigTests ModeScorerTests QuietHoursTests NotchGeometryTests SupervisorTests HangWatchdogTests StayAwakeTests CommandTapTests PresenceTrackerTests"),
 ]
 args = sys.argv[1:]
 if args and args[0] == "--list":

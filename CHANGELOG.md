@@ -1,5 +1,12 @@
 # Changelog
 
+### 0.18.1 — Triple-tap Command (2026-11-25)
+- **Tap Command three times** quickly, from any app, to wake Jarvis like "Hey Jarvis". No Accessibility or
+  Input Monitoring permission: it only asks macOS whether Command is down and how many presses there have
+  been, never which keys. Cmd+C, Cmd+V, Cmd-click and holding Command do not count.
+- Settings: `tuning.commandTapCount` (3; 0 = off), `commandTapMaxHoldMilliseconds` (260),
+  `commandTapMaxGapMilliseconds` (380), or `JARVIS_COMMAND_TAP_COUNT` etc. in `jarvis.env`.
+
 ### 0.18.0 — Phone as a passive key, and a device layer (2026-11-23)
 - **Phone proximity check** for the owner lock. The iPhone is recognised over Bluetooth by the identity macOS
   resolves for the owner's own devices (same Apple account): no companion app, listen-only. Signal averaged
